@@ -1,11 +1,7 @@
 import sys
 import os
-import pytest
-import tempfile
 import time
-import threading
 import subprocess
-from pathlib import Path
 
 # Add parent directory to path to import notebookize
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -196,7 +192,7 @@ def test_notebook_cell_separation(tmp_path, monkeypatch):
     """Test that blank lines properly create cell separations."""
     monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))
     
-    from notebookize import convert_to_percent_format, generate_jupytext_notebook
+    from notebookize import generate_jupytext_notebook
     
     body_source = """x = 10
 

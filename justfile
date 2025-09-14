@@ -8,14 +8,11 @@ default:
 test:
     uv run pytest tests/ -v
 
-# Run all tests (alias for test)
-test-all: test
-
 # Run basic extraction tests
 test-basic:
     uv run pytest tests/test_basic_extraction.py -v
 
-# Run file watching tests  
+# Run file watching tests
 test-watch:
     uv run pytest tests/test_file_watching.py -v
 
@@ -26,11 +23,8 @@ test-manual:
 # Run type checking with mypy
 lint:
     uv run mypy notebookize.py
-
-# Run all linting (type checking and style)
-lint-all:
-    uv run mypy notebookize.py
-    uv run ruff check notebookize.py
+    uv run ruff check --fix notebookize.py
+    uv run ruff check --fix tests/*.py
 
 # Clean up temporary files and caches
 clean:

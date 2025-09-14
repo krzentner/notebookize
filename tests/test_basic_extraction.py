@@ -2,15 +2,12 @@
 
 import sys
 import os
-import pytest
-from pathlib import Path
 
 # Add parent directory to path to import notebookize
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from notebookize import (
     extract_function_body,
-    get_function_source_and_def_index,
     convert_to_percent_format,
     generate_jupytext_notebook
 )
