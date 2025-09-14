@@ -388,20 +388,40 @@ def extract_function_body(func: Callable[..., Any]) -> Optional[str]:
 
 
 def open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger) -> None:
-    """Open the generated .py notebook in JupyterLab."""
+    """Open the generated notebook in JupyterLab using paired .ipynb file."""
     try:
-        # Open JupyterLab directly with the .py file
-        # JupyterLab with jupytext will recognize it as a notebook
+        # Create a paired .ipynb file using jupytext
+        ipynb_path = notebook_path.with_suffix('.ipynb')
+        
+        # Set up pairing between .py and .ipynb files
+        subprocess.run(
+            ['jupytext', '--set-formats', 'py:percent,ipynb', str(notebook_path)],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(f"# Created paired notebook: {ipynb_path}")
+        
+        # Sync to create the .ipynb file
+        subprocess.run(
+            ['jupytext', '--sync', str(notebook_path)],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        
+        # Open JupyterLab with the .ipynb file
         subprocess.Popen(
-            ['jupyter', 'lab', str(notebook_path)],
+            ['jupyter', 'lab', str(ipynb_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        logger.info(f"# Opened JupyterLab with notebook: {notebook_path}")
+        logger.info(f"# Opened JupyterLab with notebook: {ipynb_path}")
+        logger.info(f"# Note: Changes will sync between {notebook_path.name} and {ipynb_path.name}")
     except subprocess.CalledProcessError as e:
-        logger.error(f"# Failed to open JupyterLab: {e}")
+        logger.error(f"# Failed to create paired notebook: {e}")
     except FileNotFoundError:
-        logger.error("# JupyterLab not found. Please install with: pip install jupyterlab jupytext")
+        logger.error("# JupyterLab or jupytext not found. Please install with: pip install jupyterlab jupytext")
     except Exception as e:
         logger.error(f"# Failed to open JupyterLab: {e}")
 
@@ -431,11 +451,22 @@ def handle_notebook_change(notebook_path: Path, source_file: str, func_name: str
 
 
 def watch_notebook_for_changes(notebook_path: Path, source_file: str, func_name: str, logger: logging.Logger) -> None:
-    """Watch a notebook file for changes and update the source file when detected."""
-    logger.info(f"# Watching {notebook_path} for changes...")
+    """Watch notebook files for changes and update the source file when detected."""
+    # Check if we have a paired .ipynb file
+    ipynb_path = notebook_path.with_suffix('.ipynb')
+    has_ipynb = ipynb_path.exists()
+    
+    if has_ipynb:
+        logger.info(f"# Watching paired notebooks for changes:")
+        logger.info(f"#   - {notebook_path}")
+        logger.info(f"#   - {ipynb_path}")
+    else:
+        logger.info(f"# Watching {notebook_path} for changes...")
+    
     logger.info("# Press Ctrl+C to stop watching")
     
-    last_mtime = notebook_path.stat().st_mtime
+    last_py_mtime = notebook_path.stat().st_mtime
+    last_ipynb_mtime = ipynb_path.stat().st_mtime if has_ipynb else 0
     check_interval = float(os.environ.get("NOTEBOOKIZE_CHECK_INTERVAL", "1.0"))
     
     try:
@@ -443,11 +474,31 @@ def watch_notebook_for_changes(notebook_path: Path, source_file: str, func_name:
             time.sleep(check_interval)
             
             try:
-                current_mtime = notebook_path.stat().st_mtime
+                # Check .py file
+                current_py_mtime = notebook_path.stat().st_mtime
+                changed = False
                 
-                if current_mtime > last_mtime:
+                if current_py_mtime > last_py_mtime:
+                    changed = True
+                    last_py_mtime = current_py_mtime
+                
+                # Check .ipynb file if it exists
+                if has_ipynb and ipynb_path.exists():
+                    current_ipynb_mtime = ipynb_path.stat().st_mtime
+                    if current_ipynb_mtime > last_ipynb_mtime:
+                        # Sync from .ipynb to .py
+                        subprocess.run(
+                            ['jupytext', '--sync', str(ipynb_path)],
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                        changed = True
+                        last_ipynb_mtime = current_ipynb_mtime
+                        last_py_mtime = notebook_path.stat().st_mtime
+                
+                if changed:
                     handle_notebook_change(notebook_path, source_file, func_name, logger)
-                    last_mtime = current_mtime
                     
             except FileNotFoundError:
                 logger.error(f"# Notebook {notebook_path} was deleted")
