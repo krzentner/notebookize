@@ -389,10 +389,30 @@ def extract_function_body(func: Callable[..., Any]) -> Optional[str]:
 
 def open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger) -> None:
     """Open the generated notebook in JupyterLab using paired .ipynb file."""
+    # Ensure Python files open as notebooks by default in JupyterLab
     try:
-        # Create a paired .ipynb file using jupytext
-        ipynb_path = notebook_path.with_suffix('.ipynb')
+        result = subprocess.run(
+            ['jupytext-config', 'list-default-viewer'],
+            capture_output=True,
+            text=True,
+            check=False
+        )
         
+        if 'python' not in result.stdout:
+            subprocess.run(
+                ['jupytext-config', 'set-default-viewer', 'python'],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            logger.info("Configured JupyterLab to open .py files as notebooks by default")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass  # jupytext-config might not be available in older versions
+    
+    # Create a paired .ipynb file using jupytext
+    ipynb_path = notebook_path.with_suffix('.ipynb')
+    
+    try:
         # Set up pairing between .py and .ipynb files
         subprocess.run(
             ['jupytext', '--set-formats', 'py:percent,ipynb', str(notebook_path)],
@@ -400,7 +420,7 @@ def open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger) -> 
             capture_output=True,
             text=True
         )
-        logger.info(f"# Created paired notebook: {ipynb_path}")
+        logger.info(f"Created paired notebook: {ipynb_path}")
         
         # Sync to create the .ipynb file
         subprocess.run(
@@ -409,43 +429,46 @@ def open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger) -> 
             capture_output=True,
             text=True
         )
-        
-        # Open JupyterLab with the .ipynb file
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to create paired notebook: {e}")
+        return
+    except FileNotFoundError:
+        logger.error("jupytext not found. Please install with: pip install jupytext")
+        return
+    
+    # Open JupyterLab with the .ipynb file
+    try:
         subprocess.Popen(
             ['jupyter', 'lab', str(ipynb_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        logger.info(f"# Opened JupyterLab with notebook: {ipynb_path}")
-        logger.info(f"# Note: Changes will sync between {notebook_path.name} and {ipynb_path.name}")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"# Failed to create paired notebook: {e}")
+        logger.info(f"Opened JupyterLab with notebook: {ipynb_path}")
+        logger.info(f"Note: Changes will sync between {notebook_path.name} and {ipynb_path.name}")
     except FileNotFoundError:
-        logger.error("# JupyterLab or jupytext not found. Please install with: pip install jupyterlab jupytext")
-    except Exception as e:
-        logger.error(f"# Failed to open JupyterLab: {e}")
+        logger.error("JupyterLab not found. Please install with: pip install jupyterlab")
 
 
 def handle_notebook_change(notebook_path: Path, source_file: str, func_name: str, logger: logging.Logger) -> bool:
     """Handle a detected change in the notebook file."""
-    logger.info(f"# Notebook changed, updating {func_name} in {source_file}")
+    logger.info(f"Notebook changed, updating {func_name} in {source_file}")
     
     # Extract code from the modified notebook
     new_body = extract_code_from_notebook(notebook_path)
     
     if not new_body:
-        logger.warning("# No code found in notebook")
+        logger.warning("No code found in notebook")
         return False
     
     # Rewrite the function in the source file
     success = rewrite_function_in_file(source_file, func_name, new_body)
     
     if success:
-        logger.info(f"# Successfully updated {func_name}")
-        logger.info("# New function body:")
+        logger.info(f"Successfully updated {func_name}")
+        logger.info("New function body:")
         logger.info(new_body)
     else:
-        logger.error(f"# Failed to update {func_name}")
+        logger.error(f"Failed to update {func_name}")
     
     return success
 
@@ -457,13 +480,13 @@ def watch_notebook_for_changes(notebook_path: Path, source_file: str, func_name:
     has_ipynb = ipynb_path.exists()
     
     if has_ipynb:
-        logger.info(f"# Watching paired notebooks for changes:")
-        logger.info(f"#   - {notebook_path}")
-        logger.info(f"#   - {ipynb_path}")
+        logger.info(f"Watching paired notebooks for changes:")
+        logger.info(f"  - {notebook_path}")
+        logger.info(f"  - {ipynb_path}")
     else:
-        logger.info(f"# Watching {notebook_path} for changes...")
+        logger.info(f"Watching {notebook_path} for changes...")
     
-    logger.info("# Press Ctrl+C to stop watching")
+    logger.info("Press Ctrl+C to stop watching")
     
     last_py_mtime = notebook_path.stat().st_mtime
     last_ipynb_mtime = ipynb_path.stat().st_mtime if has_ipynb else 0
@@ -501,13 +524,13 @@ def watch_notebook_for_changes(notebook_path: Path, source_file: str, func_name:
                     handle_notebook_change(notebook_path, source_file, func_name, logger)
                     
             except FileNotFoundError:
-                logger.error(f"# Notebook {notebook_path} was deleted")
+                logger.error(f"Notebook {notebook_path} was deleted")
                 break
             except Exception as e:
-                logger.error(f"# Error checking notebook: {e}")
+                logger.error(f"Error checking notebook: {e}")
                 
     except KeyboardInterrupt:
-        logger.info("# Stopped watching for changes")
+        logger.info("Stopped watching for changes")
 
 
 F = TypeVar('F', bound=Callable[..., Any])
@@ -547,15 +570,15 @@ def notebookize(
             logger.error(f"Unable to extract function body for {func.__name__}")
             return func(*args, **kwargs)
         
-        logger.info(f"# Original function body for {func.__name__}:")
+        logger.info(f"Original function body for {func.__name__}:")
         logger.info(body_source)
         
         # Generate jupytext notebook
         try:
             notebook_path = generate_jupytext_notebook(func.__name__, body_source)
-            logger.info(f"# Notebook saved to: {notebook_path}")
+            logger.info(f"Notebook saved to: {notebook_path}")
         except Exception as e:
-            logger.error(f"# Failed to generate notebook: {e}")
+            logger.error(f"Failed to generate notebook: {e}")
             return func(*args, **kwargs)
         
         # Open in JupyterLab if requested
@@ -566,7 +589,7 @@ def notebookize(
         watch_notebook_for_changes(notebook_path, source_file, func.__name__, logger)
         
         # Never actually call the original function
-        logger.info(f"# Watching stopped. Function {func.__name__} was not executed.")
+        logger.info(f"Watching stopped. Function {func.__name__} was not executed.")
         return None
     
     return wrapper  # type: ignore[return-value]
