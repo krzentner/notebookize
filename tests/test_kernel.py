@@ -5,13 +5,10 @@ import os
 import time
 import subprocess
 import json
-import tempfile
-from pathlib import Path
 
 # Add parent directory to path to import notebookize
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from notebookize import notebookize
 
 
 def test_kernel_registration(tmp_path, monkeypatch):
@@ -56,8 +53,8 @@ if __name__ == "__main__":
         kernels = json.loads(result.stdout)
         kernel_specs = kernels.get("kernelspecs", {})
         
-        # Look for our kernel
-        notebookize_kernels = [k for k in kernel_specs.keys() if k.startswith("notebookize-")]
+        # Look for our kernel (specifically test_kernel_func)
+        notebookize_kernels = [k for k in kernel_specs.keys() if k.startswith("notebookize-test_kernel_func-")]
         assert len(notebookize_kernels) > 0, "No notebookize kernel found"
         
         # Remember kernel name for cleanup
@@ -87,7 +84,7 @@ if __name__ == "__main__":
         if result.returncode == 0:
             kernels = json.loads(result.stdout)
             kernel_specs = kernels.get("kernelspecs", {})
-            remaining_kernels = [k for k in kernel_specs.keys() if k.startswith("notebookize-")]
+            remaining_kernels = [k for k in kernel_specs.keys() if k == kernel_name]
             print(f"Original kernel: {kernel_name}")
             print(f"Remaining kernels: {remaining_kernels}")
             assert len(remaining_kernels) == 0, f"Kernel was not cleaned up: {remaining_kernels}"
@@ -99,40 +96,3 @@ if __name__ == "__main__":
         pytest.skip("jupyter command not available")
 
 
-def test_kernel_command_handler():
-    """Test the start-kernel command handler."""
-    # Create a temporary connection file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        connection_data = {
-            "shell_port": 12345,
-            "iopub_port": 12346,
-            "stdin_port": 12347,
-            "control_port": 12348,
-            "hb_port": 12349,
-            "ip": "127.0.0.1",
-            "key": "test-key",
-            "transport": "tcp",
-            "signature_scheme": "hmac-sha256",
-            "kernel_name": "test"
-        }
-        json.dump(connection_data, f)
-        connection_file = f.name
-    
-    try:
-        # Test that the command can be invoked (it will timeout, but that's expected)
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "notebookize", "start-kernel", "99999", connection_file],
-                capture_output=True,
-                text=True,
-                timeout=1
-            )
-            # If it doesn't timeout, check for error
-            assert result.returncode != 0
-            assert "Error" in result.stderr or "Timeout" in result.stderr
-        except subprocess.TimeoutExpired:
-            # Expected - the command tries to connect to a non-existent port
-            pass
-    finally:
-        # Clean up
-        os.unlink(connection_file)

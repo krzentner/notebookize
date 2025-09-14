@@ -8,6 +8,11 @@ default:
 test:
     uv run pytest tests/ -v
 
+# Run all tests including kernel connection test
+test-all:
+    uv run pytest tests/ -v
+    @echo "All tests passed!"
+
 # Run basic extraction tests
 test-basic:
     uv run pytest tests/test_basic_extraction.py -v
@@ -21,6 +26,12 @@ test-manual:
     echo "# THIS FILE IS A COPY AND GITIGNORED" >> manual_test_jupyterlab.py
     cat tests/manual_test_jupyterlab.py >> manual_test_jupyterlab.py
     uv run python manual_test_jupyterlab.py
+
+# Run kernel demo
+run-demo:
+    echo "# THIS FILE IS A COPY AND GITIGNORED" >> demo.py
+    cat tests/demo.py >> demo.py
+    uv run python demo.py
 
 # Run type checking with mypy
 lint:
@@ -36,3 +47,12 @@ clean:
     find . -type f -name ".coverage" -delete
     find . -type d -name "*.egg-info" -exec rm -rf {} +
     find . -type d -name ".ipynb_checkpoints" -exec rm -rf {} +
+
+# Clean up any leftover notebookize kernels
+clean-kernels:
+    @echo "Cleaning up notebookize kernels..."
+    @uv run jupyter kernelspec list 2>/dev/null | grep notebookize | awk '{print $$1}' | while read kernel; do \
+        echo "Removing kernel: $$kernel"; \
+        uv run jupyter kernelspec remove "$$kernel" -f 2>/dev/null || true; \
+    done
+    @echo "Done cleaning kernels"
