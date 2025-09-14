@@ -1151,8 +1151,11 @@ wheels = [
 name = "notebookize"
 source = { editable = "." }
 dependencies = [
+    { name = "ipykernel" },
+    { name = "jupyter-client" },
     { name = "jupyterlab" },
     { name = "jupytext" },
+    { name = "pyzmq" },
 ]
 
 [package.dev-dependencies]
@@ -1171,8 +1174,11 @@ recommended = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ipykernel", specifier = ">=6.29.0" },
+    { name = "jupyter-client", specifier = ">=8.6.0" },
     { name = "jupyterlab", specifier = ">=4.4.7" },
     { name = "jupytext", specifier = ">=1.17.3" },
+    { name = "pyzmq", specifier = ">=25.0.0" },
 ]
 
 [package.metadata.requires-dev]
