@@ -1,0 +1,3 @@
+In @notebookize.py, please write a decorator that can wrap a function. When the decorator is called, it should print out the source code of the inside of the function. It should do this by using the ast module combined with the
+  starting line number of the function to find all inner line numbers of the function, then split the original source into three sections (before, inside, after) of the original source so that it preserves comments and other things lost
+  by the AST module. Please write tests in the tests directory to check edge cases, like a multi-line final statement and other decorators on the function. Update the justfile to call those tests.
