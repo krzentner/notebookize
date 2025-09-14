@@ -2,4 +2,4 @@ __pycache__
 /dist
 .vscode
 *.txt
-manual_test_jupyterlab.py
+/manual_test_jupyterlab.py

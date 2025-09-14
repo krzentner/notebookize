@@ -6,7 +6,7 @@ import subprocess
 # Add parent directory to path to import notebookize
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from notebookize import extract_code_from_notebook, rewrite_function_in_file, split_file_at_function
+from notebookize import _extract_code_from_notebook, _rewrite_function_in_file, _split_file_at_function
 
 
 def test_extract_code_from_notebook(tmp_path):
@@ -37,7 +37,7 @@ print(result)
     notebook_path = tmp_path / "test.py"
     notebook_path.write_text(notebook_content)
     
-    extracted = extract_code_from_notebook(notebook_path)
+    extracted = _extract_code_from_notebook(notebook_path)
     
     # Check that code was extracted properly
     assert "x = 10" in extracted
@@ -64,7 +64,7 @@ def goodbye():
     source_file.write_text(source_content)
     
     # Split at test_func
-    before, body, after, indent = split_file_at_function(str(source_file), "test_func")
+    before, body, after, indent = _split_file_at_function(str(source_file), "test_func")
     
     # Check the parts
     assert "def hello():" in before
@@ -106,7 +106,7 @@ def goodbye():
 return z * 2'''
     
     # Rewrite the test_func
-    success = rewrite_function_in_file(str(source_file), "test_func", new_body)
+    success = _rewrite_function_in_file(str(source_file), "test_func", new_body)
     assert success
     
     # Check the result
@@ -192,7 +192,7 @@ def test_notebook_cell_separation(tmp_path, monkeypatch):
     """Test that blank lines properly create cell separations."""
     monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))
     
-    from notebookize import generate_jupytext_notebook
+    from notebookize import _generate_jupytext_notebook
     
     body_source = """x = 10
 
@@ -202,7 +202,7 @@ z = x + y
 return z"""
     
     # Generate notebook
-    notebook_path = generate_jupytext_notebook("test_func", body_source)
+    notebook_path = _generate_jupytext_notebook("test_func", body_source)
     
     content = notebook_path.read_text()
     
@@ -214,8 +214,8 @@ return z"""
     assert "# Add your code here" not in content
     
     # Extract code back
-    from notebookize import extract_code_from_notebook
-    extracted = extract_code_from_notebook(notebook_path)
+    from notebookize import _extract_code_from_notebook
+    extracted = _extract_code_from_notebook(notebook_path)
     
     # Should have all the code parts
     assert "x = 10" in extracted
@@ -330,3 +330,57 @@ if __name__ == "__main__":
     assert "def process_data():" in updated_source
     assert '"""Process data with comments."""' in updated_source
     assert "return result" in updated_source
+
+
+def test_write_back_disabled(tmp_path, monkeypatch):
+    """Test that write_back=False prevents source file updates."""
+    monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))
+    
+    # Create a test Python file
+    source_content = '''from notebookize import notebookize
+
+@notebookize(open_jupyterlab=False, write_back=False)
+def test_func():
+    """Test function."""
+    x = 42
+    return x
+    
+if __name__ == "__main__":
+    test_func()
+'''
+    
+    source_file = tmp_path / "test_no_writeback.py"
+    source_file.write_text(source_content)
+    
+    # Run the script in a subprocess
+    proc = subprocess.Popen(
+        [sys.executable, str(source_file)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    
+    # Give it time to create the notebook
+    time.sleep(1)
+    
+    # Find the generated notebook
+    notebooks = list(tmp_path.glob("test_func_*.py"))
+    assert len(notebooks) == 1
+    notebook_path = notebooks[0]
+    
+    # Modify the notebook
+    original_notebook = notebook_path.read_text()
+    modified_notebook = original_notebook.replace("x = 42", "x = 100")
+    notebook_path.write_text(modified_notebook)
+    
+    # Give the watcher time to detect the change
+    time.sleep(0.5)
+    
+    # Kill the subprocess
+    proc.terminate()
+    proc.wait(timeout=2)
+    
+    # Check that the source file was NOT updated
+    final_source = source_file.read_text()
+    assert "x = 42" in final_source  # Original value should still be there
+    assert "x = 100" not in final_source  # New value should NOT be there

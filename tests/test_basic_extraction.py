@@ -7,9 +7,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from notebookize import (
-    extract_function_body,
-    convert_to_percent_format,
-    generate_jupytext_notebook
+    _extract_function_body,
+    _convert_to_percent_format,
+    _generate_jupytext_notebook
 )
 
 
@@ -18,7 +18,7 @@ def test_extract_simple_function():
     def simple_func():
         return 42
     
-    body = extract_function_body(simple_func)
+    body = _extract_function_body(simple_func)
     assert body is not None
     assert "return 42" in body
 
@@ -31,7 +31,7 @@ def test_extract_function_with_comments():
         # Another comment
         return x * 2
     
-    body = extract_function_body(func_with_comments)
+    body = _extract_function_body(func_with_comments)
     assert body is not None
     assert "# This is a comment" in body
     assert "x = 10  # inline comment" in body
@@ -47,7 +47,7 @@ def test_extract_multiline_statement():
             4 + 5 + 6
         )
     
-    body = extract_function_body(multiline_func)
+    body = _extract_function_body(multiline_func)
     assert body is not None
     assert "return (" in body
     assert "1 + 2 + 3 +" in body
@@ -62,7 +62,7 @@ def test_extract_function_with_docstring():
         x = 100
         return x
     
-    body = extract_function_body(func_with_docstring)
+    body = _extract_function_body(func_with_docstring)
     assert body is not None
     assert '"""This is a docstring."""' in body
     assert "x = 100" in body
@@ -82,7 +82,7 @@ y = 20
 result = x + y
 return result"""
     
-    cells = convert_to_percent_format(body_source)
+    cells = _convert_to_percent_format(body_source)
     
     # Should have code cells separated by blank lines
     assert len(cells) > 0
@@ -108,7 +108,7 @@ def test_notebook_generation(tmp_path, monkeypatch):
 y = x * 2
 return y"""
     
-    notebook_path = generate_jupytext_notebook("test_func", body_source)
+    notebook_path = _generate_jupytext_notebook("test_func", body_source)
     
     # Check that notebook was created
     assert notebook_path.exists()

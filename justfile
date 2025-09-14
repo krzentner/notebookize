@@ -18,6 +18,8 @@ test-watch:
 
 # Run manual test with JupyterLab (interactive)
 test-manual:
+    echo "# THIS FILE IS A COPY AND GITIGNORED" >> manual_test_jupyterlab.py
+    cat tests/manual_test_jupyterlab.py >> manual_test_jupyterlab.py
     uv run python manual_test_jupyterlab.py
 
 # Run type checking with mypy
