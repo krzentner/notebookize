@@ -4,10 +4,33 @@
 default:
     @just --list
 
-# Run notebookize tests
+# Run all tests
 test:
-    uv run pytest tests/test_notebookize.py -v
+    uv run pytest tests/ -v
 
+# Run all tests (alias for test)
+test-all: test
+
+# Run basic extraction tests
+test-basic:
+    uv run pytest tests/test_basic_extraction.py -v
+
+# Run file watching tests  
+test-watch:
+    uv run pytest tests/test_file_watching.py -v
+
+# Run manual test with JupyterLab (interactive)
+test-manual:
+    uv run python manual_test_jupyterlab.py
+
+# Run type checking with mypy
+lint:
+    uv run mypy notebookize.py
+
+# Run all linting (type checking and style)
+lint-all:
+    uv run mypy notebookize.py
+    uv run ruff check notebookize.py
 
 # Clean up temporary files and caches
 clean:

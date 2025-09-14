@@ -9,11 +9,14 @@ import textwrap
 import logging
 import os
 import uuid
+import time
+import subprocess
 from pathlib import Path
 from datetime import datetime
+from typing import Callable, Any, Optional, Tuple, List, Union, TypeVar
 
 
-def get_logger():
+def get_logger() -> logging.Logger:
     """Get or create the notebookize logger."""
     logger = logging.getLogger("notebookize")
     
@@ -28,14 +31,14 @@ def get_logger():
     return logger
 
 
-def get_notebook_dir():
+def get_notebook_dir() -> Path:
     """Get the directory for saving notebooks from environment variable or default."""
     notebook_dir = os.environ.get("NOTEBOOKIZE_PATH", "~/notebooks/")
     notebook_dir = os.path.expanduser(notebook_dir)
     return Path(notebook_dir)
 
 
-def get_function_source_and_def_index(func):
+def get_function_source_and_def_index(func: Callable[..., Any]) -> Tuple[List[str], int]:
     """
     Get the source lines of a function and find where the actual 
     function definition starts (skipping decorators).
@@ -53,7 +56,7 @@ def get_function_source_and_def_index(func):
     return source_lines, func_def_index
 
 
-def parse_function_ast(source_lines, func_def_index, func_name):
+def parse_function_ast(source_lines: List[str], func_def_index: int, func_name: str) -> Optional[ast.FunctionDef]:
     """Parse the function source and return the AST node for the function."""
     # Get source starting from the function definition
     source_from_def = ''.join(source_lines[func_def_index:])
@@ -72,7 +75,7 @@ def parse_function_ast(source_lines, func_def_index, func_name):
     return None
 
 
-def get_function_body_bounds(func_node, source_lines):
+def get_function_body_bounds(func_node: Optional[ast.FunctionDef], source_lines: List[str]) -> Tuple[Optional[int], Optional[int]]:
     """
     Get the line bounds of the function body.
     Returns (first_body_line, last_body_line) relative to the parsed source.
@@ -88,7 +91,7 @@ def get_function_body_bounds(func_node, source_lines):
     return first_body_line, last_body_line
 
 
-def extract_body_lines(source_lines, func_def_index, first_body_line, last_body_line):
+def extract_body_lines(source_lines: List[str], func_def_index: int, first_body_line: int, last_body_line: int) -> List[str]:
     """Extract the actual body lines from the source."""
     # Adjust indices: offset by func_def_index since we parsed from there
     # and line numbers in AST are 1-indexed relative to the parsed source
@@ -97,7 +100,7 @@ def extract_body_lines(source_lines, func_def_index, first_body_line, last_body_
     return source_lines[actual_start:actual_end]
 
 
-def dedent_body_lines(body_lines):
+def dedent_body_lines(body_lines: List[str]) -> str:
     """Remove common indentation from body lines while preserving relative indentation."""
     if not body_lines:
         return ""
@@ -107,49 +110,26 @@ def dedent_body_lines(body_lines):
     return textwrap.dedent(body_text)
 
 
-def convert_to_percent_format(body_source):
+def convert_to_percent_format(body_source: str) -> List[str]:
     """
     Convert function body source to jupytext percent format.
-    Splits on blank lines and top-level comments to create cells.
+    Splits on blank lines to create cells. Comments are preserved in code cells.
     """
     lines = body_source.split('\n')
-    cells = []
-    current_cell = []
+    cells: List[str] = []
+    current_cell: List[str] = []
     
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        
+    for line in lines:
         # Check if this is a blank line
         if not line.strip():
             # If we have content in current cell, save it and start a new one
             if current_cell:
                 cells.append('\n'.join(current_cell))
                 current_cell = []
-            i += 1
             continue
         
-        # Check if this is a top-level comment block
-        if line.strip().startswith('#'):
-            # Save current cell if it has content
-            if current_cell:
-                cells.append('\n'.join(current_cell))
-                current_cell = []
-            
-            # Collect all consecutive comment lines
-            comment_lines = []
-            while i < len(lines) and lines[i].strip().startswith('#'):
-                comment_lines.append(lines[i])
-                i += 1
-            
-            # Add comment block as a markdown cell
-            if comment_lines:
-                cells.append(('markdown', '\n'.join(comment_lines)))
-            continue
-        
-        # Regular code line
+        # Regular code line (including comments)
         current_cell.append(line)
-        i += 1
     
     # Add any remaining content
     if current_cell:
@@ -158,7 +138,7 @@ def convert_to_percent_format(body_source):
     return cells
 
 
-def generate_jupytext_notebook(func_name, body_source):
+def generate_jupytext_notebook(func_name: str, body_source: str) -> Path:
     """
     Generate a jupytext .py percent format notebook from function source code.
     Returns the path to the generated notebook.
@@ -177,10 +157,10 @@ def generate_jupytext_notebook(func_name, body_source):
     cells = convert_to_percent_format(body_source)
     
     # Create the jupytext percent format content
-    content_parts = []
+    content_parts: List[str] = []
     
-    # Add header
-    content_parts.append(f"""# ---
+    # Add header (minimal, just the jupytext metadata)
+    content_parts.append("""# ---
 # jupyter:
 #   jupytext:
 #     text_representation:
@@ -192,38 +172,12 @@ def generate_jupytext_notebook(func_name, body_source):
 #     display_name: Python 3
 #     language: python
 #     name: python3
-# ---
-
-# %% [markdown]
-# # Function: {func_name}
-#
-# Generated from function `{func_name}` at {datetime.now().isoformat()}
-
-# %% [markdown]
-# ## Function Body
-""")
+# ---""")
     
-    # Add cells
+    # Add cells - all are code cells now (including comments)
     for cell in cells:
-        if isinstance(cell, tuple) and cell[0] == 'markdown':
-            # Markdown cell (comments)
-            content_parts.append("\n# %% [markdown]")
-            content_parts.append(cell[1])
-        else:
-            # Code cell
-            content_parts.append("\n# %%")
-            content_parts.append(cell)
-    
-    # Add footer with execution cell
-    content_parts.append("""
-# %% [markdown]
-# ## Execution
-#
-# You can add cells below to test and explore this function.
-
-# %%
-# Add your code here
-""")
+        content_parts.append("\n# %%")
+        content_parts.append(cell)
     
     content = '\n'.join(content_parts)
     
@@ -233,7 +187,182 @@ def generate_jupytext_notebook(func_name, body_source):
     return notebook_path
 
 
-def extract_function_body(func):
+def extract_code_from_notebook(notebook_path: Path) -> str:
+    """
+    Extract code cells from a jupytext percent format notebook.
+    Returns the combined code as a string.
+    """
+    content = notebook_path.read_text()
+    lines = content.split('\n')
+    
+    code_parts: List[str] = []
+    in_code_cell = False
+    current_cell: List[str] = []
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
+        # Check for cell markers
+        if line.strip() == '# %%':
+            # Start of a code cell
+            if current_cell and in_code_cell:
+                # Save previous code cell
+                code_parts.append('\n'.join(current_cell))
+                current_cell = []
+            in_code_cell = True
+            i += 1
+            continue
+        elif line.strip() == '# %% [markdown]':
+            # Start of a markdown cell
+            if current_cell and in_code_cell:
+                # Save previous code cell
+                code_parts.append('\n'.join(current_cell))
+                current_cell = []
+            in_code_cell = False
+            i += 1
+            continue
+        
+        # Collect lines if in code cell
+        if in_code_cell:
+            current_cell.append(line)
+        
+        i += 1
+    
+    # Add any remaining code cell
+    if current_cell and in_code_cell:
+        code_parts.append('\n'.join(current_cell))
+    
+    # Combine all code parts, separated by blank lines
+    filtered_parts = []
+    for part in code_parts:
+        if part.strip():
+            filtered_parts.append(part.strip())
+    
+    return '\n\n'.join(filtered_parts)
+
+
+def rewrite_function_in_file(file_path: str, func_name: str, new_body: str) -> bool:
+    """
+    Rewrite a function's body in a Python file while preserving everything else.
+    Uses split_file_at_function for a much simpler implementation.
+    """
+    # Split the file into three parts
+    before, old_body, after, indent = split_file_at_function(file_path, func_name)
+    
+    # Prepare the new body with proper indentation
+    new_body_lines = []
+    for line in new_body.split('\n'):
+        if line.strip():
+            new_body_lines.append(indent + line)
+        else:
+            new_body_lines.append("")
+    
+    # Reconstruct the file
+    new_body_indented = '\n'.join(new_body_lines)
+    new_content = before + '\n' + new_body_indented
+    if after:
+        new_content += '\n' + after
+    
+    # Write back to the file
+    with open(file_path, 'w') as f:
+        f.write(new_content)
+    
+    return True
+
+
+def find_function_end_by_dedent(lines: List[str], body_start_line: int) -> int:
+    """Find the end of a function by looking for dedentation."""
+    if body_start_line >= len(lines):
+        return body_start_line
+    
+    # Get the indentation of the first body line
+    first_body_line = lines[body_start_line] if body_start_line < len(lines) else ""
+    base_indent = len(first_body_line) - len(first_body_line.lstrip()) if first_body_line.strip() else 4
+    
+    # Look for the next line with less indentation
+    for i in range(body_start_line + 1, len(lines)):
+        line = lines[i]
+        if not line.strip():  # Skip empty lines
+            continue
+        
+        line_indent = len(line) - len(line.lstrip())
+        if line_indent < base_indent:
+            return i - 1
+    
+    return len(lines) - 1
+
+
+def split_file_at_function(file_path: str, func_name: str) -> Tuple[str, str, str, str]:
+    """
+    Split a file into three parts: before function body, function body, and after function body.
+    Returns (before, body, after, indent) where concatenating them gives the original file.
+    """
+    with open(file_path, 'r') as f:
+        original_content = f.read()
+    
+    # Parse the file to find the function
+    tree = ast.parse(original_content)
+    
+    # Find the function node
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            func_node = node
+            break
+    
+    if not func_node:
+        raise ValueError(f"Function {func_name} not found in {file_path}")
+    
+    # Get the lines of the original file
+    lines = original_content.split('\n')
+    
+    # Find where the function signature ends (look for the colon)
+    func_start_line = func_node.lineno - 1  # Convert to 0-indexed
+    func_def_end_line = func_start_line
+    while func_def_end_line < len(lines) and not lines[func_def_end_line].rstrip().endswith(':'):
+        func_def_end_line += 1
+    
+    # The body starts on the next line
+    body_start_line = func_def_end_line + 1
+    
+    # Find the end of the function body
+    if not func_node.body:
+        body_end_line = body_start_line
+    else:
+        # Use AST to find the last line
+        ast_end_lineno = func_node.body[-1].end_lineno
+        if ast_end_lineno is not None:
+            body_end_line = ast_end_lineno - 1
+        else:
+            body_end_line = -1
+        
+        # Handle case where end_lineno is None
+        if body_end_line == -1:
+            body_end_line = find_function_end_by_dedent(lines, body_start_line)
+    
+    # Get the indentation of the function body
+    indent = ""
+    for i in range(body_start_line, min(body_end_line + 1, len(lines))):
+        if lines[i].strip():
+            indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+            break
+    if not indent:
+        indent = "    "
+    
+    # Split into three parts
+    before_lines = lines[:body_start_line]
+    body_lines = lines[body_start_line:body_end_line + 1]
+    after_lines = lines[body_end_line + 1:]
+    
+    before = '\n'.join(before_lines)
+    body = '\n'.join(body_lines)
+    after = '\n'.join(after_lines) if after_lines else ""
+    
+    return before, body, after, indent
+
+
+def extract_function_body(func: Callable[..., Any]) -> Optional[str]:
     """
     Extract the body source code of a function.
     Returns the body source as a string or None if extraction fails.
@@ -258,33 +387,135 @@ def extract_function_body(func):
     return dedent_body_lines(body_lines)
 
 
-def notebookize(func):
+def open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger) -> None:
+    """Open the generated .py notebook in JupyterLab."""
+    try:
+        # Open JupyterLab directly with the .py file
+        # JupyterLab with jupytext will recognize it as a notebook
+        subprocess.Popen(
+            ['jupyter', 'lab', str(notebook_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        logger.info(f"# Opened JupyterLab with notebook: {notebook_path}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"# Failed to open JupyterLab: {e}")
+    except FileNotFoundError:
+        logger.error("# JupyterLab not found. Please install with: pip install jupyterlab jupytext")
+    except Exception as e:
+        logger.error(f"# Failed to open JupyterLab: {e}")
+
+
+def handle_notebook_change(notebook_path: Path, source_file: str, func_name: str, logger: logging.Logger) -> bool:
+    """Handle a detected change in the notebook file."""
+    logger.info(f"# Notebook changed, updating {func_name} in {source_file}")
+    
+    # Extract code from the modified notebook
+    new_body = extract_code_from_notebook(notebook_path)
+    
+    if not new_body:
+        logger.warning("# No code found in notebook")
+        return False
+    
+    # Rewrite the function in the source file
+    success = rewrite_function_in_file(source_file, func_name, new_body)
+    
+    if success:
+        logger.info(f"# Successfully updated {func_name}")
+        logger.info("# New function body:")
+        logger.info(new_body)
+    else:
+        logger.error(f"# Failed to update {func_name}")
+    
+    return success
+
+
+def watch_notebook_for_changes(notebook_path: Path, source_file: str, func_name: str, logger: logging.Logger) -> None:
+    """Watch a notebook file for changes and update the source file when detected."""
+    logger.info(f"# Watching {notebook_path} for changes...")
+    logger.info("# Press Ctrl+C to stop watching")
+    
+    last_mtime = notebook_path.stat().st_mtime
+    check_interval = float(os.environ.get("NOTEBOOKIZE_CHECK_INTERVAL", "1.0"))
+    
+    try:
+        while True:
+            time.sleep(check_interval)
+            
+            try:
+                current_mtime = notebook_path.stat().st_mtime
+                
+                if current_mtime > last_mtime:
+                    handle_notebook_change(notebook_path, source_file, func_name, logger)
+                    last_mtime = current_mtime
+                    
+            except FileNotFoundError:
+                logger.error(f"# Notebook {notebook_path} was deleted")
+                break
+            except Exception as e:
+                logger.error(f"# Error checking notebook: {e}")
+                
+    except KeyboardInterrupt:
+        logger.info("# Stopped watching for changes")
+
+
+F = TypeVar('F', bound=Callable[..., Any])
+
+def notebookize(
+    func: Optional[F] = None,
+    *,
+    open_jupyterlab: bool = True) -> Union[F, Callable[[F], F]]:
     """
-    Decorator that prints the inner source code of a function when called
-    and generates a jupytext markdown notebook.
-    Uses AST to find function boundaries while preserving original formatting.
+    Decorator that generates a jupytext notebook and watches for changes,
+    updating the original function source when the notebook is modified.
     """
+    if func is None:
+        return functools.partial(  # type: ignore[return-value]
+            notebookize,
+            open_jupyterlab=open_jupyterlab
+        )
+
     logger = get_logger()
     
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Optional[Any]:
+        # Get the source file path of the function
+        try:
+            source_file = inspect.getsourcefile(func)
+            if not source_file:
+                logger.error(f"Cannot determine source file for {func.__name__}")
+                return func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error getting source file: {e}")
+            return func(*args, **kwargs)
+        
         # Extract the function body
         body_source = extract_function_body(func)
         
-        if body_source:
-            logger.info("# Function body:")
-            logger.info(body_source)
-            
-            # Generate jupytext notebook
-            try:
-                notebook_path = generate_jupytext_notebook(func.__name__, body_source)
-                logger.info(f"# Notebook saved to: {notebook_path}")
-            except Exception as e:
-                logger.error(f"# Failed to generate notebook: {e}")
-        else:
-            logger.error(f"# Unable to extract function body for {func.__name__}")
+        if not body_source:
+            logger.error(f"Unable to extract function body for {func.__name__}")
+            return func(*args, **kwargs)
         
-        # Execute the original function
-        return func(*args, **kwargs)
+        logger.info(f"# Original function body for {func.__name__}:")
+        logger.info(body_source)
+        
+        # Generate jupytext notebook
+        try:
+            notebook_path = generate_jupytext_notebook(func.__name__, body_source)
+            logger.info(f"# Notebook saved to: {notebook_path}")
+        except Exception as e:
+            logger.error(f"# Failed to generate notebook: {e}")
+            return func(*args, **kwargs)
+        
+        # Open in JupyterLab if requested
+        if open_jupyterlab:
+            open_notebook_in_jupyterlab(notebook_path, logger)
+        
+        # Watch for changes
+        watch_notebook_for_changes(notebook_path, source_file, func.__name__, logger)
+        
+        # Never actually call the original function
+        logger.info(f"# Watching stopped. Function {func.__name__} was not executed.")
+        return None
     
-    return wrapper
+    return wrapper  # type: ignore[return-value]
