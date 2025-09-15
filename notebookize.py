@@ -431,25 +431,93 @@ def _extract_function_body(func: Callable[..., Any]) -> Optional[str]:
     return _dedent_body_lines(body_lines)
 
 
-def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, kernel_name: Optional[str] = None) -> None:
+def _start_kernel_directly(func_name: str, logger: logging.Logger, 
+                          user_ns: Optional[Dict[str, Any]] = None,
+                          user_module: Optional[Any] = None) -> Tuple[Optional[str], Optional[Any]]:
+    """Start an IPython kernel directly and return the connection file path and app instance.
+    
+    Returns:
+        Tuple of (connection_file_path, kernel_app) or (None, None) if startup failed
+    """
+    try:
+        from ipykernel.kernelapp import IPKernelApp
+        import tempfile
+        import os
+        
+        # Generate a unique connection file path (but don't create the file)
+        temp_dir = tempfile.gettempdir()
+        connection_file = os.path.join(temp_dir, f'kernel-{os.getpid()}.json')
+        
+        # Remove the file if it exists from a previous run
+        if os.path.exists(connection_file):
+            os.remove(connection_file)
+        
+        # Initialize the kernel app with the specific connection file
+        app = IPKernelApp.instance()
+        
+        # Store the user namespace and module for later injection
+        app._user_ns_to_inject = user_ns
+        app._user_module_to_inject = user_module
+        
+        # We need to set up a custom initialization to inject our namespace
+        original_init_kernel = app.init_kernel
+        
+        def custom_init_kernel():
+            # Call the original initialization
+            original_init_kernel()
+            
+            # Now inject our namespace after kernel is initialized
+            if hasattr(app, '_user_ns_to_inject') and app._user_ns_to_inject:
+                app.kernel.shell.user_ns.update(app._user_ns_to_inject)
+                logger.info(f"Setting user namespace with {len(app._user_ns_to_inject)} variables")
+            
+            if hasattr(app, '_user_module_to_inject') and app._user_module_to_inject:
+                app.kernel.shell.user_module = app._user_module_to_inject
+                logger.info(f"Setting user module: {app._user_module_to_inject}")
+        
+        # Replace the init method
+        app.init_kernel = custom_init_kernel
+        
+        # Pass the connection file as a command line argument
+        app.initialize(['--IPKernelApp.connection_file=' + connection_file])
+        
+        logger.info(f"Kernel initialized with connection file: {connection_file}")
+        
+        # Return both the connection file and the app
+        # The app will be started in the main thread later
+        return connection_file, app
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize kernel: {e}")
+        return None, None
+
+
+def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, connection_file: Optional[str] = None) -> None:
     """Open the generated .py notebook directly in JupyterLab.
     
     Args:
         notebook_path: Path to the .py notebook file
         logger: Logger instance
-        kernel_name: Optional kernel name to use for the notebook
+        connection_file: Optional connection file to use with --existing
     """
-    # Note: Kernel metadata is now embedded directly in the notebook during generation
-    # Open JupyterLab with the .py file directly
     try:
-        subprocess.Popen(
-            ["jupyter", "lab", str(notebook_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
-        if kernel_name:
-            logger.info(f"Notebook should connect to kernel: {kernel_name}")
+        if connection_file:
+            # Use --existing to connect to running kernel
+            subprocess.Popen(
+                ["jupyter", "lab", str(notebook_path), "--existing", connection_file],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
+            logger.info(f"Connected to existing kernel: {connection_file}")
+        else:
+            # Open normally
+            subprocess.Popen(
+                ["jupyter", "lab", str(notebook_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
     except FileNotFoundError:
         logger.error(
             "JupyterLab not found. Please install with: pip install jupyterlab"
@@ -781,31 +849,33 @@ def notebookize(
         logger.info(f"Original function body for {func.__name__}:")
         logger.info(body_source)
 
-        # Set up kernel if requested (do this first to get kernel name)
-        # Capture the calling frame's namespace if kernel is enabled
-        user_ns = None
-        user_module = None
-        if kernel and extract_module_locals is not None:
-            # Get the calling frame's module and locals
-            frame = inspect.currentframe()
-            if frame and frame.f_back:
-                caller_frame = frame.f_back
-                user_module = inspect.getmodule(caller_frame)
-                # Combine function arguments with caller's locals
-                user_ns = dict(caller_frame.f_locals)
-                # Add the function arguments
-                sig = inspect.signature(func)
-                bound_args = sig.bind(*args, **kwargs)
-                bound_args.apply_defaults()
-                user_ns.update(bound_args.arguments)
-        
-        kernel_name, kernel_info = _setup_kernel_if_requested(
-            func.__name__, kernel, logger, user_ns, user_module
-        )
+        # Set up kernel if requested 
+        connection_file = None
+        kernel_app = None
+        if kernel:
+            # Capture the calling frame's namespace
+            user_ns = None
+            user_module = None
+            if extract_module_locals is not None:
+                # Get the calling frame's module and locals
+                frame = inspect.currentframe()
+                if frame and frame.f_back:
+                    caller_frame = frame.f_back
+                    user_module = inspect.getmodule(caller_frame)
+                    # Combine function arguments with caller's locals
+                    user_ns = dict(caller_frame.f_locals)
+                    # Add the function arguments
+                    sig = inspect.signature(func)
+                    bound_args = sig.bind(*args, **kwargs)
+                    bound_args.apply_defaults()
+                    user_ns.update(bound_args.arguments)
+            
+            # Initialize kernel and get connection file
+            connection_file, kernel_app = _start_kernel_directly(func.__name__, logger, user_ns, user_module)
 
-        # Generate jupytext notebook with correct kernel name
+        # Generate jupytext notebook (no kernel name needed for --existing approach)
         try:
-            notebook_path = _generate_jupytext_notebook(func.__name__, body_source, kernel_name)
+            notebook_path = _generate_jupytext_notebook(func.__name__, body_source)
             logger.info(f"Notebook saved to: {notebook_path}")
         except Exception as e:
             logger.error(f"Failed to generate notebook: {e}")
@@ -813,11 +883,11 @@ def notebookize(
         
         # Open in JupyterLab if requested
         if open_jupyterlab:
-            _open_notebook_in_jupyterlab(notebook_path, logger, kernel_name)
+            _open_notebook_in_jupyterlab(notebook_path, logger, connection_file)
 
-        # If we have a kernel, we need to wait for ZMQ connection then run it in the main thread
-        if kernel_info:
-            # Watch for changes in a background thread
+        # If we have a kernel, we need to run it in the main thread
+        if kernel_app and connection_file:
+            # Start file watching in a background thread
             watch_thread = threading.Thread(
                 target=_watch_notebook_for_changes,
                 args=(notebook_path, source_file, func.__name__, logger, write_back),
@@ -825,75 +895,22 @@ def notebookize(
             )
             watch_thread.start()
             
-            # Wait for JupyterLab to send us the connection file via ZMQ
-            zmq_port = kernel_info["port"]
-            connection_data = _wait_for_connection_file(zmq_port)
-            
-            if connection_data is None:
-                logger.error("Failed to receive connection file from JupyterLab")
-                return None
-            
-            # Create a temporary connection file with the data from JupyterLab
-            temp_connection_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-            json.dump(connection_data, temp_connection_file)
-            temp_connection_file.close()
-            actual_connection_file = temp_connection_file.name
-            
-            # Start the kernel in the main thread
+            # Run the kernel in the main thread
             try:
-                logger.info("=" * 60)
-                logger.info("KERNEL STARTUP INFORMATION")
-                logger.info("=" * 60)
-                logger.info(f"Kernel name: {kernel_name}")
-                logger.info(f"Connection file from JupyterLab: {actual_connection_file}")
-                
-                # Read the connection file to show the ports
-                logger.info(f"Shell port: {connection_data.get('shell_port', 'unassigned')}")
-                logger.info(f"IOPub port: {connection_data.get('iopub_port', 'unassigned')}")
-                logger.info(f"Stdin port: {connection_data.get('stdin_port', 'unassigned')}")
-                logger.info(f"Control port: {connection_data.get('control_port', 'unassigned')}")
-                logger.info(f"Heartbeat port: {connection_data.get('hb_port', 'unassigned')}")
-                
-                kernel_app = IPKernelApp.instance()
-                kernel_app.connection_file = actual_connection_file
-                
-                logger.info("Initializing IPKernelApp...")
-                kernel_app.initialize([])
-                
-                # Set the user namespace if provided
-                if kernel_info["user_ns"] is not None:
-                    logger.info(f"Setting user namespace with {len(kernel_info['user_ns'])} variables")
-                    kernel_app.kernel.user_ns = kernel_info["user_ns"]
-                if kernel_info["user_module"] is not None:
-                    logger.info(f"Setting user module: {kernel_info['user_module']}")
-                    kernel_app.kernel.user_module = kernel_info["user_module"]
-                if kernel_info["user_ns"] is not None or kernel_info["user_module"] is not None:
-                    kernel_app.shell.set_completer_frame()  # type: ignore[union-attr]
-                
-                logger.info("=" * 60)
-                logger.info("Starting IPython kernel...")
-                logger.info("Waiting for client connections...")
-                logger.info("=" * 60)
-                
-                kernel_app.start()
+                logger.info("Starting IPython kernel in main thread...")
+                logger.info(f"Connection file: {connection_file}")
+                logger.info("Kernel is ready for connections")
+                kernel_app.start()  # This blocks until kernel is terminated
             except KeyboardInterrupt:
                 logger.info("Kernel interrupted by user")
             except Exception as e:
-                logger.error(f"Failed to start kernel: {e}")
-            finally:
-                # Clean up kernel if it was registered
-                if kernel_name:
-                    _unregister_kernel(kernel_name)
-                    logger.info(f"Cleaned up kernel: {kernel_name}")
+                logger.error(f"Kernel error: {e}")
         else:
             # No kernel, just watch for changes normally
             try:
                 _watch_notebook_for_changes(notebook_path, source_file, func.__name__, logger, write_back)
-            finally:
-                # Clean up kernel if it was registered (shouldn't happen here)
-                if kernel_name:
-                    _unregister_kernel(kernel_name)
-                    logger.info(f"Cleaned up kernel: {kernel_name}")
+            except KeyboardInterrupt:
+                logger.info("Watching interrupted by user")
 
         # Never actually call the original function
         logger.info(f"Watching stopped. Function {func.__name__} was not executed.")
