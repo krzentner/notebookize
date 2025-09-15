@@ -109,14 +109,14 @@ def _get_function_body_bounds(
     Returns (first_body_line, last_body_line) relative to the parsed source.
     """
     if not func_node or not func_node.body:
-        raise ValueError("FIXME")
+        raise ValueError(f"Function node has no body - cannot extract empty function")
 
     # The function signature ends with a colon, body starts on next line
     func_def_line = func_node.lineno
     first_body_line = func_def_line + 1
     last_body_line = func_node.body[-1].end_lineno
     if last_body_line is None:
-        raise ValueError("FIXME")
+        raise ValueError(f"Cannot determine end line of function body - AST node missing end_lineno")
 
     return first_body_line, last_body_line
 
