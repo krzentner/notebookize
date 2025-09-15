@@ -22,7 +22,7 @@ coverage:
     uv run coverage run -m pytest tests/ -v
     uv run coverage report -m
 
-# Generate HTML coverage report  
+# Generate HTML coverage report
 coverage-html:
     uv run coverage run -m pytest tests/ -v
     uv run coverage html
@@ -46,7 +46,13 @@ test-manual:
 run-demo:
     echo "# THIS FILE IS A COPY AND GITIGNORED" > demo.py
     cat tests/demo.py >> demo.py
-    uv run python demo.py
+    uv run python demo.py --use-jupyterlab
+
+# Run kernel demo
+run-demo-console:
+    echo "# THIS FILE IS A COPY AND GITIGNORED" > demo.py
+    cat tests/demo.py >> demo.py
+    uv run python demo.py --use-console
 
 # Run type checking with mypy
 lint:
@@ -67,13 +73,13 @@ clean:
 clean-kernels:
     #!/usr/bin/env bash
     echo "Cleaning up notebookize kernels and connection files..."
-    
+
     # Remove notebookize kernelspecs
     uv run jupyter kernelspec list 2>/dev/null | grep "notebookize-" | sed 's/^[[:space:]]*//' | awk '{print $1}' | while read kernel; do
         echo "Removing kernelspec: $kernel"
         uv run jupyter kernelspec remove "$kernel" -f 2>/dev/null || true
     done
-    
+
     # Remove external kernel connection directories
     for dir in /tmp/notebookize_kernels_*; do
         if [ -d "$dir" ]; then
@@ -81,7 +87,7 @@ clean-kernels:
             rm -rf "$dir"
         fi
     done
-    
+
     # Remove kernel connection files
     for file in /tmp/kernel-*.json; do
         if [ -f "$file" ]; then
@@ -89,7 +95,7 @@ clean-kernels:
             rm -f "$file"
         fi
     done
-    
+
     # Remove runtime connection files
     runtime_dir="$HOME/.local/share/jupyter/runtime"
     if [ -d "$runtime_dir" ]; then
@@ -100,5 +106,5 @@ clean-kernels:
             fi
         done
     fi
-    
+
     echo "Cleanup complete"
