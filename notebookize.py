@@ -532,17 +532,34 @@ def _open_jupyter_console(connection_file: str, logger: logging.Logger) -> None:
         logger: Logger instance
     """
     try:
-        subprocess.Popen(
-            ["jupyter", "console", "--existing", connection_file],
-            stdout=None,  # Allow console to use terminal
-            stderr=None,  # Allow console to use terminal
-            stdin=None    # Allow console to use terminal
-        )
+        import sys
+        import os
+        
+        # On Unix systems, use script command to allocate a PTY
+        # This avoids double-echo issues while keeping the console non-blocking
+        if sys.platform != "win32":
+            # Use 'script' command to allocate a PTY for the console
+            # -q: quiet mode, -c: command to run
+            # /dev/null: don't save typescript
+            subprocess.Popen(
+                ["script", "-q", "-c", f"jupyter console --existing {connection_file}", "/dev/null"],
+                stdin=sys.stdin,
+                stdout=sys.stdout,
+                stderr=sys.stderr
+            )
+        else:
+            # On Windows, just run normally (no PTY issues)
+            subprocess.Popen(
+                ["jupyter", "console", "--existing", connection_file]
+            )
+        
         logger.info(f"Opened Jupyter console connected to kernel: {connection_file}")
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         logger.error(
-            "Jupyter console not found. Please install with: pip install jupyter-console"
+            f"Command not found: {e}. Please install jupyter-console with: pip install jupyter-console"
         )
+    except Exception as e:
+        logger.error(f"Error opening console: {e}")
 
 
 def _extract_function_body_from_source(source_content: str, func_name: str) -> str:
