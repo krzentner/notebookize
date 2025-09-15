@@ -170,6 +170,8 @@ def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: O
     Generate a jupytext .py percent format notebook from function source code.
     Returns the path to the generated notebook.
     """
+    import yaml
+    
     # Create notebook directory if it doesn't exist
     notebook_dir = _get_notebook_dir()
     notebook_dir.mkdir(parents=True, exist_ok=True)
@@ -186,29 +188,52 @@ def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: O
     # Create the jupytext percent format content
     content_parts: List[str] = []
 
-    # Add header (minimal, just the jupytext metadata)
-    if kernel_name:
-        display_name = f"Notebookize - {func_name}"
-        kernel_spec = f"""#   kernelspec:
-#     display_name: {display_name}
-#     language: python
-#     name: {kernel_name}"""
-    else:
-        kernel_spec = """#   kernelspec:
-#     display_name: Python 3
-#     language: python
-#     name: python3"""
+    # Build the header metadata as a dictionary
+    metadata = {
+        "jupyter": {
+            "jupytext": {
+                "text_representation": {
+                    "extension": ".py",
+                    "format_name": "percent",
+                    "format_version": "1.3",
+                    "jupytext_version": "1.16.0"
+                }
+            }
+        }
+    }
     
-    content_parts.append(f"""# ---
-# jupyter:
-#   jupytext:
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.16.0
-{kernel_spec}
-# ---""")
+    # Add kernel spec if kernel is enabled
+    if kernel_name:
+        pid = os.getpid()
+        kernel_id = f"notebookize-{func_name.lower()}-{pid}"
+        display_name = f"Notebookize: {func_name} (PID {pid})"
+        metadata["jupyter"]["kernelspec"] = {
+            "display_name": display_name,
+            "language": "python",
+            "name": kernel_id
+        }
+    else:
+        metadata["jupyter"]["kernelspec"] = {
+            "display_name": "Python 3",
+            "language": "python",
+            "name": "python3"
+        }
+    
+    # Generate YAML header with proper formatting
+    yaml_str = yaml.dump(metadata, default_flow_style=False, sort_keys=False)
+    
+    # Format as jupytext header comment
+    header_lines = ["# ---"]
+    for line in yaml_str.strip().split('\n'):
+        header_lines.append(f"# {line}")
+    header_lines.append("# ---")
+    header = "\n".join(header_lines)
+    
+    # Log the header for debugging
+    logger = _get_logger()
+    logger.info(f"Jupytext header:\n{header}")
+    
+    content_parts.append(header)
 
     # Add cells - all are code cells now (including comments)
     for cell in cells:
@@ -508,19 +533,32 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
     """
     try:
         if connection_file:
-            # Create external kernels directory
-            external_kernels_dir = Path.cwd() / "external_kernels"
+            # Create external kernels directory in /tmp
+            external_kernels_dir = Path("/tmp") / f"notebookize_kernels_{os.getpid()}"
             external_kernels_dir.mkdir(exist_ok=True)
             
-            # Copy connection file to external kernels directory
-            import shutil
+            # Read and modify connection file to add kernel metadata
             import json
             
-            # Copy the connection file with the same name
-            external_connection_file = external_kernels_dir / os.path.basename(connection_file)
-            shutil.copy2(connection_file, external_connection_file)
+            with open(connection_file, 'r') as f:
+                connection_info = json.load(f)
             
-            logger.info(f"Copied connection file to: {external_connection_file}")
+            # Add kernel metadata for better identification in JupyterLab
+            # Extract function name from notebook path for context
+            func_name = notebook_path.stem.split('_')[0] if '_' in notebook_path.stem else notebook_path.stem
+            
+            connection_info['kernel_name'] = f"Notebookize: {func_name}"
+            connection_info['metadata'] = {
+                'kernel_name': f"Notebookize: {func_name}",
+                'display_name': f"Notebookize: {func_name} (PID {os.getpid()})"
+            }
+            
+            # Write the enhanced connection file to external kernels directory
+            external_connection_file = external_kernels_dir / os.path.basename(connection_file)
+            with open(external_connection_file, 'w') as f:
+                json.dump(connection_info, f, indent=2)
+            
+            logger.info(f"Created external kernel connection at: {external_connection_file}")
             
             # Open JupyterLab with external kernel support
             subprocess.Popen(
@@ -533,8 +571,7 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
                 stderr=subprocess.DEVNULL,
             )
             logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
-            logger.info(f"External kernel available from: {external_connection_file}")
-            logger.info("The kernel should be available in: Kernel > Change Kernel")
+            logger.info(f"Kernel '{func_name}' should be available in: Kernel > Change Kernel")
         else:
             # Open normally without kernel
             subprocess.Popen(
@@ -942,9 +979,11 @@ def notebookize(
             # Initialize kernel and get connection file
             connection_file, kernel_app = _start_kernel_directly(func.__name__, logger, user_ns, user_module)
 
-        # Generate jupytext notebook (no kernel name needed for --existing approach)
+        # Generate jupytext notebook with kernel name if kernel is enabled
         try:
-            notebook_path = _generate_jupytext_notebook(func.__name__, body_source)
+            # Pass a kernel name if we have a kernel running
+            kernel_name = "kernel" if kernel and connection_file else None
+            notebook_path = _generate_jupytext_notebook(func.__name__, body_source, kernel_name)
             logger.info(f"Notebook saved to: {notebook_path}")
         except Exception as e:
             logger.error(f"Failed to generate notebook: {e}")
