@@ -27,6 +27,12 @@ def process_data(data_list, multiplier=2):
     total = sum(results)
     average = total / len(results) if results else 0
 
+    print(average)
+
+    locals()
+
+    globals()
+
     return {
         "results": results,
         "total": total,

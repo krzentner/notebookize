@@ -29,7 +29,7 @@ test-manual:
 
 # Run kernel demo
 run-demo:
-    echo "# THIS FILE IS A COPY AND GITIGNORED" >> demo.py
+    echo "# THIS FILE IS A COPY AND GITIGNORED" > demo.py
     cat tests/demo.py >> demo.py
     uv run python demo.py
 
@@ -50,9 +50,10 @@ clean:
 
 # Clean up any leftover notebookize kernels
 clean-kernels:
-    @echo "Cleaning up notebookize kernels..."
-    @uv run jupyter kernelspec list 2>/dev/null | grep notebookize | awk '{print $$1}' | while read kernel; do \
-        echo "Removing kernel: $$kernel"; \
-        uv run jupyter kernelspec remove "$$kernel" -f 2>/dev/null || true; \
+    #!/usr/bin/env bash
+    echo "Cleaning up notebookize kernels..."
+    uv run jupyter kernelspec list 2>/dev/null | grep "notebookize-" | sed 's/^[[:space:]]*//' | awk '{print $1}' | while read kernel; do
+        echo "Removing kernel: $kernel"
+        uv run jupyter kernelspec remove "$kernel" -f 2>/dev/null || true
     done
-    @echo "Done cleaning kernels"
+    echo "Done cleaning kernels"
