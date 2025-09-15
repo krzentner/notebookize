@@ -165,7 +165,7 @@ def _convert_to_percent_format(body_source: str) -> List[str]:
     return cells
 
 
-def _generate_jupytext_notebook(func_name: str, body_source: str) -> Path:
+def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: Optional[str] = None) -> Path:
     """
     Generate a jupytext .py percent format notebook from function source code.
     Returns the path to the generated notebook.
@@ -187,7 +187,19 @@ def _generate_jupytext_notebook(func_name: str, body_source: str) -> Path:
     content_parts: List[str] = []
 
     # Add header (minimal, just the jupytext metadata)
-    content_parts.append("""# ---
+    if kernel_name:
+        display_name = f"Notebookize - {func_name}"
+        kernel_spec = f"""#   kernelspec:
+#     display_name: {display_name}
+#     language: python
+#     name: {kernel_name}"""
+    else:
+        kernel_spec = """#   kernelspec:
+#     display_name: Python 3
+#     language: python
+#     name: python3"""
+    
+    content_parts.append(f"""# ---
 # jupyter:
 #   jupytext:
 #     text_representation:
@@ -195,10 +207,7 @@ def _generate_jupytext_notebook(func_name: str, body_source: str) -> Path:
 #       format_name: percent
 #       format_version: '1.3'
 #       jupytext_version: 1.16.0
-#   kernelspec:
-#     display_name: Python 3
-#     language: python
-#     name: python3
+{kernel_spec}
 # ---""")
 
     # Add cells - all are code cells now (including comments)
@@ -430,22 +439,7 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, ke
         logger: Logger instance
         kernel_name: Optional kernel name to use for the notebook
     """
-    # If we have a custom kernel, add metadata to the .py file
-    if kernel_name:
-        try:
-            with open(notebook_path, 'r') as f:
-                content = f.read()
-            
-            # Add kernel metadata as a comment at the top if not already present
-            kernel_comment = f"# %%% {{'kernel': '{kernel_name}'}}\n"
-            if not content.startswith("# %%% {'kernel'"):
-                content = kernel_comment + content
-                with open(notebook_path, 'w') as f:
-                    f.write(content)
-                logger.info(f"Added kernel metadata to notebook: {kernel_name}")
-        except Exception as e:
-            logger.warning(f"Could not add kernel metadata: {e}")
-    
+    # Note: Kernel metadata is now embedded directly in the notebook during generation
     # Open JupyterLab with the .py file directly
     try:
         subprocess.Popen(
@@ -462,6 +456,35 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, ke
         )
 
 
+def _extract_function_body_from_source(source_content: str, func_name: str) -> str:
+    """Extract function body from source code content."""
+    try:
+        tree = ast.parse(source_content)
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                # Get the original source lines
+                source_lines = source_content.splitlines()
+                
+                # Find function start and end
+                func_start_line = node.lineno - 1  # Convert to 0-based
+                
+                # Find the last line of the function
+                func_end_line = func_start_line
+                for child in ast.walk(node):
+                    if hasattr(child, 'lineno') and child.lineno:
+                        func_end_line = max(func_end_line, child.lineno - 1)
+                
+                # Extract function lines (skip the def line)
+                if func_start_line + 1 <= func_end_line:
+                    func_lines = source_lines[func_start_line + 1:func_end_line + 1]
+                    return '\n'.join(func_lines)
+                
+        return ""
+    except Exception as e:
+        return ""
+
+
 def _handle_notebook_change(
     notebook_path: Path, source_file: str, func_name: str, logger: logging.Logger
 ) -> bool:
@@ -475,13 +498,38 @@ def _handle_notebook_change(
         logger.warning("No code found in notebook")
         return False
 
+    # Get the current function body for diff
+    try:
+        with open(source_file, 'r') as f:
+            source_content = f.read()
+        old_body = _extract_function_body_from_source(source_content, func_name)
+    except Exception as e:
+        logger.warning(f"Could not read current function body for diff: {e}")
+        old_body = ""
+
+    # Show diff if we have both old and new content
+    if old_body and old_body.strip() != new_body.strip():
+        import difflib
+        diff_lines = list(difflib.unified_diff(
+            old_body.splitlines(keepends=True),
+            new_body.splitlines(keepends=True),
+            fromfile=f"{source_file}:{func_name} (before)",
+            tofile=f"{source_file}:{func_name} (after)",
+            lineterm=""
+        ))
+        
+        if diff_lines:
+            logger.info("Changes detected:")
+            for line in diff_lines:
+                logger.info(line.rstrip())
+    elif old_body.strip() == new_body.strip():
+        logger.info("No actual changes detected (content is identical)")
+
     # Rewrite the function in the source file
     success = _rewrite_function_in_file(source_file, func_name, new_body)
 
     if success:
         logger.info(f"Successfully updated {func_name}")
-        logger.info("New function body:")
-        logger.info(new_body)
     else:
         logger.error(f"Failed to update {func_name}")
 
@@ -733,15 +781,7 @@ def notebookize(
         logger.info(f"Original function body for {func.__name__}:")
         logger.info(body_source)
 
-        # Generate jupytext notebook
-        try:
-            notebook_path = _generate_jupytext_notebook(func.__name__, body_source)
-            logger.info(f"Notebook saved to: {notebook_path}")
-        except Exception as e:
-            logger.error(f"Failed to generate notebook: {e}")
-            return func(*args, **kwargs)
-
-        # Set up kernel if requested
+        # Set up kernel if requested (do this first to get kernel name)
         # Capture the calling frame's namespace if kernel is enabled
         user_ns = None
         user_module = None
@@ -762,6 +802,14 @@ def notebookize(
         kernel_name, kernel_info = _setup_kernel_if_requested(
             func.__name__, kernel, logger, user_ns, user_module
         )
+
+        # Generate jupytext notebook with correct kernel name
+        try:
+            notebook_path = _generate_jupytext_notebook(func.__name__, body_source, kernel_name)
+            logger.info(f"Notebook saved to: {notebook_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate notebook: {e}")
+            return func(*args, **kwargs)
         
         # Open in JupyterLab if requested
         if open_jupyterlab:
