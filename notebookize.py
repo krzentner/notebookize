@@ -629,42 +629,6 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
         logger.error(f"Error opening JupyterLab: {e}")
 
 
-def _open_jupyter_console(connection_file: str, logger: logging.Logger) -> None:
-    """Open Jupyter console connected to the running kernel.
-
-    Args:
-        connection_file: Path to the kernel connection file
-        logger: Logger instance
-    """
-    try:
-        import sys
-
-        # On Unix systems, use script command to allocate a PTY
-        # This avoids double-echo issues while keeping the console non-blocking
-        if sys.platform != "win32":
-            # Use 'script' command to allocate a PTY for the console
-            # -q: quiet mode, -c: command to run
-            # /dev/null: don't save typescript
-            subprocess.Popen(
-                ["script", "-q", "-c", f"jupyter console --existing {connection_file}", "/dev/null"],
-                stdin=sys.stdin,
-                stdout=sys.stdout,
-                stderr=sys.stderr
-            )
-        else:
-            # On Windows, just run normally (no PTY issues)
-            subprocess.Popen(
-                ["jupyter", "console", "--existing", connection_file]
-            )
-
-        logger.info(f"Opened Jupyter console connected to kernel: {connection_file}")
-    except FileNotFoundError as e:
-        logger.error(
-            f"Command not found: {e}. Please install jupyter-console with: pip install jupyter-console"
-        )
-    except Exception as e:
-        logger.error(f"Error opening console: {e}")
-
 
 def _extract_function_body_from_source(source_content: str, func_name: str) -> str:
     """Extract function body from source code content."""
@@ -798,9 +762,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 def notebookize(
     func: Optional[F] = None, *,
     open_jupyterlab: bool = True,
-    open_console: bool = False,
-    write_back: bool = True,
-    kernel: bool = False
+    write_back: bool = True
 ) -> Union[F, Callable[[F], F]]:
     """
     Decorator that generates a jupytext notebook and watches for changes,
@@ -809,14 +771,12 @@ def notebookize(
     Args:
         func: The function to decorate
         open_jupyterlab: Whether to open the notebook in JupyterLab
-        open_console: Whether to open Jupyter console connected to the kernel
         write_back: Whether to write changes back to the source file (default: True)
-        kernel: Whether to set up a custom kernel for the notebook (default: False)
     """
     if func is None:
         return functools.partial(  # type: ignore[return-value]
-            notebookize, open_jupyterlab=open_jupyterlab, open_console=open_console,
-            write_back=write_back, kernel=kernel
+            notebookize, open_jupyterlab=open_jupyterlab,
+            write_back=write_back
         )
 
     logger = _get_logger()
@@ -843,34 +803,31 @@ def notebookize(
         logger.info(f"Original function body for {func.__name__}:")
         logger.info(body_source)
 
-        # Set up kernel if requested
-        connection_file = None
-        kernel_app = None
-        if kernel:
-            # Capture the calling frame's namespace
-            user_ns = None
-            user_module = None
-            if extract_module_locals is not None:
-                # Get the calling frame's module and locals
-                frame = inspect.currentframe()
-                if frame and frame.f_back:
-                    caller_frame = frame.f_back
-                    user_module = inspect.getmodule(caller_frame)
-                    # Combine function arguments with caller's locals
-                    user_ns = dict(caller_frame.f_locals)
-                    # Add the function arguments
-                    sig = inspect.signature(func)
-                    bound_args = sig.bind(*args, **kwargs)
-                    bound_args.apply_defaults()
-                    user_ns.update(bound_args.arguments)
+        # Always set up kernel
+        # Capture the calling frame's namespace
+        user_ns = None
+        user_module = None
+        if extract_module_locals is not None:
+            # Get the calling frame's module and locals
+            frame = inspect.currentframe()
+            if frame and frame.f_back:
+                caller_frame = frame.f_back
+                user_module = inspect.getmodule(caller_frame)
+                # Combine function arguments with caller's locals
+                user_ns = dict(caller_frame.f_locals)
+                # Add the function arguments
+                sig = inspect.signature(func)
+                bound_args = sig.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                user_ns.update(bound_args.arguments)
 
-            # Initialize kernel and get connection file
-            connection_file, kernel_app = _start_kernel_directly(func.__name__, logger, user_ns, user_module)
+        # Initialize kernel and get connection file
+        connection_file, kernel_app = _start_kernel_directly(func.__name__, logger, user_ns, user_module)
 
-        # Generate jupytext notebook with kernel name if kernel is enabled
+        # Generate jupytext notebook with kernel name (always enabled)
         try:
-            # Pass a kernel name if we have a kernel running
-            kernel_name = "kernel" if kernel and connection_file else None
+            # Pass a kernel name since we always have a kernel running
+            kernel_name = "kernel" if connection_file else None
             notebook_path = _generate_jupytext_notebook(func.__name__, body_source, kernel_name)
             logger.info(f"Notebook saved to: {notebook_path}")
         except Exception as e:
@@ -880,12 +837,6 @@ def notebookize(
         # Open in JupyterLab if requested
         if open_jupyterlab:
             _open_notebook_in_jupyterlab(notebook_path, logger, connection_file, func.__name__)
-
-        # Open console if requested (requires kernel)
-        if open_console and connection_file:
-            _open_jupyter_console(connection_file, logger)
-        elif open_console and not connection_file:
-            logger.warning("open_console requires kernel=True to be set")
 
         # If we have a kernel, we need to run it in the main thread
         if kernel_app and connection_file:
@@ -897,7 +848,7 @@ def notebookize(
             )
             watch_thread.start()
 
-            # Run the kernel in the main thread
+            # Run the kernel in the main thread (for JupyterLab mode)
             try:
                 logger.info("Starting IPython kernel in main thread...")
                 logger.info(f"Connection file: {connection_file}")
@@ -916,7 +867,9 @@ def notebookize(
                 import signal
                 
                 def cleanup_handler(signum: int, frame: Any) -> None:
+                    # In JupyterLab mode, exit immediately
                     logger.info("Received interrupt signal, cleaning up...")
+                    
                     # Kill JupyterLab processes if any
                     global _jupyter_lab_processes
                     for proc in _jupyter_lab_processes:

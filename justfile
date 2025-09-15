@@ -46,13 +46,8 @@ test-manual:
 run-demo:
     echo "# THIS FILE IS A COPY AND GITIGNORED" > demo.py
     cat tests/demo.py >> demo.py
-    uv run python demo.py --use-jupyterlab
+    uv run python demo.py
 
-# Run kernel demo
-run-demo-console:
-    echo "# THIS FILE IS A COPY AND GITIGNORED" > demo.py
-    cat tests/demo.py >> demo.py
-    uv run python demo.py --use-console
 
 # Run type checking with mypy
 lint:
