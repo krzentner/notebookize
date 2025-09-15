@@ -53,6 +53,7 @@ run-demo:
 
 # Run type checking with mypy
 lint:
+    uv run ruff format .
     uv run mypy notebookize.py
     uv run ruff check --fix notebookize.py
     uv run ruff check --fix tests/*.py
@@ -65,6 +66,9 @@ clean:
     find . -type f -name ".coverage" -delete
     find . -type d -name "*.egg-info" -exec rm -rf {} +
     find . -type d -name ".ipynb_checkpoints" -exec rm -rf {} +
+    # Clean up generated notebook files (with timestamp pattern)
+    find . -type f -name "*_????????_??????_????????.jupytext.py" -delete
+    find . -type f -name "*_????????_??????_????????.py" -delete
 
 # Clean up any leftover notebookize kernels and connection files
 clean-kernels:

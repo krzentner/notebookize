@@ -121,14 +121,16 @@ def _get_function_body_bounds(
     Returns (first_body_line, last_body_line) relative to the parsed source.
     """
     if not func_node or not func_node.body:
-        raise ValueError(f"Function node has no body - cannot extract empty function")
+        raise ValueError("Function node has no body - cannot extract empty function")
 
     # The function signature ends with a colon, body starts on next line
     func_def_line = func_node.lineno
     first_body_line = func_def_line + 1
     last_body_line = func_node.body[-1].end_lineno
     if last_body_line is None:
-        raise ValueError(f"Cannot determine end line of function body - AST node missing end_lineno")
+        raise ValueError(
+            "Cannot determine end line of function body - AST node missing end_lineno"
+        )
 
     return first_body_line, last_body_line
 
@@ -175,7 +177,9 @@ def _convert_to_percent_format(body_source: str) -> List[str]:
     return cells
 
 
-def _generate_jupytext_notebook(func_name: str, body_source: str, source_file: str) -> Path:
+def _generate_jupytext_notebook(
+    func_name: str, body_source: str, source_file: str
+) -> Path:
     """
     Generate a jupytext .py percent format notebook from function source code.
     Returns the path to the generated notebook.
@@ -546,7 +550,7 @@ def _find_jupyterlab_start_directory(notebook_path: Path) -> Path:
             capture_output=True,
             text=True,
             cwd=str(notebook_path.parent),
-            check=False
+            check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
             return Path(result.stdout.strip())
@@ -727,13 +731,19 @@ def _handle_notebook_change(
         source_content = f.read()
     old_body = _extract_function_body_from_source(source_content, func_name)
 
+    # Remove common leading indentation from old_body for comparison
+    # This normalizes the indentation so we can properly compare
+    import textwrap
+
+    old_body_dedented = textwrap.dedent(old_body)
+
     # Show diff if we have both old and new content
-    if old_body and old_body.strip() != new_body.strip():
+    if old_body_dedented and old_body_dedented.strip() != new_body.strip():
         import difflib
 
         diff_lines = list(
             difflib.unified_diff(
-                old_body.splitlines(keepends=True),
+                old_body_dedented.splitlines(keepends=True),
                 new_body.splitlines(keepends=True),
                 fromfile=f"{source_file}:{func_name} (before)",
                 tofile=f"{source_file}:{func_name} (after)",
@@ -745,7 +755,7 @@ def _handle_notebook_change(
             logger.info("Changes detected:")
             for line in diff_lines:
                 logger.info(line.rstrip())
-    elif old_body.strip() == new_body.strip():
+    elif old_body_dedented.strip() == new_body.strip():
         logger.info("No actual changes detected (content is identical)")
 
     # Rewrite the function in the source file
@@ -863,7 +873,9 @@ def notebookize(
         )
 
         # Generate jupytext notebook with kernel name (always enabled)
-        notebook_path = _generate_jupytext_notebook(func.__name__, body_source, source_file)
+        notebook_path = _generate_jupytext_notebook(
+            func.__name__, body_source, source_file
+        )
         logger.info(f"Notebook saved to: {notebook_path}")
 
         # Open in JupyterLab if requested

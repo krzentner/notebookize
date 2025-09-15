@@ -207,7 +207,9 @@ return z"""
 
     # Generate notebook
     test_source_file = "/tmp/test_source.py"
-    notebook_path = _generate_jupytext_notebook("test_func", body_source, test_source_file)
+    notebook_path = _generate_jupytext_notebook(
+        "test_func", body_source, test_source_file
+    )
 
     content = notebook_path.read_text()
 
