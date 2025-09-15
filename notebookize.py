@@ -1,6 +1,6 @@
-"""A decorator that prints the source code of functions when called."""
+"""A Python decorator that turns functions back into jupyter notebooks, complete with their context."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import ast
 import inspect
