@@ -478,8 +478,14 @@ def _start_kernel_directly(func_name: str, logger: logging.Logger,
         # Replace the init method
         app.init_kernel = custom_init_kernel
         
-        # Pass the connection file as a command line argument
-        app.initialize(['--IPKernelApp.connection_file=' + connection_file])
+        # Pass the connection file and kernel name as command line arguments
+        # Use PID in kernel name for uniqueness
+        kernel_name = f"notebookize-{func_name}-{os.getpid()}"
+        app.initialize([
+            '--IPKernelApp.connection_file=' + connection_file,
+            '--IPKernelApp.kernel_name=' + kernel_name
+        ])
+        logger.info(f"Kernel name: {kernel_name}")
         
         logger.info(f"Kernel initialized with connection file: {connection_file}")
         
@@ -502,26 +508,48 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
     """
     try:
         if connection_file:
-            # Use --existing to connect to running kernel
+            # Create external kernels directory
+            external_kernels_dir = Path.cwd() / "external_kernels"
+            external_kernels_dir.mkdir(exist_ok=True)
+            
+            # Copy connection file to external kernels directory
+            import shutil
+            import json
+            
+            # Copy the connection file with the same name
+            external_connection_file = external_kernels_dir / os.path.basename(connection_file)
+            shutil.copy2(connection_file, external_connection_file)
+            
+            logger.info(f"Copied connection file to: {external_connection_file}")
+            
+            # Open JupyterLab with external kernel support
             subprocess.Popen(
-                ["jupyter", "lab", str(notebook_path), "--existing", connection_file],
+                [
+                    "jupyter", "lab", str(notebook_path),
+                    f"--ServerApp.external_connection_dir={external_kernels_dir}",
+                    "--ServerApp.allow_external_kernels=True"
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
-            logger.info(f"Connected to existing kernel: {connection_file}")
+            logger.info(f"External kernel available from: {external_connection_file}")
+            logger.info("The kernel should be available in: Kernel > Change Kernel")
         else:
-            # Open normally
+            # Open normally without kernel
             subprocess.Popen(
                 ["jupyter", "lab", str(notebook_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
+            
     except FileNotFoundError:
         logger.error(
             "JupyterLab not found. Please install with: pip install jupyterlab"
         )
+    except Exception as e:
+        logger.error(f"Error opening JupyterLab: {e}")
 
 
 def _open_jupyter_console(connection_file: str, logger: logging.Logger) -> None:

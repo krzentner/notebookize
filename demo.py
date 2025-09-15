@@ -7,8 +7,8 @@ from notebookize import notebookize
 # Global variable that the kernel can access
 GLOBAL_CONFIG = {"version": "1.0", "debug": True}
 
-@notebookize(open_jupyterlab=False, 
-             open_console=True,
+@notebookize(open_jupyterlab=True, 
+             open_console=False,
              kernel=True)
 def process_data(data_list, multiplier=2):
     """Process data with access to function arguments in the kernel.
