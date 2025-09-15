@@ -13,6 +13,8 @@ import time
 import subprocess
 import threading
 import json
+import sys
+
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Any, Optional, Tuple, List, Union, TypeVar, Dict
@@ -89,7 +91,7 @@ def _get_function_source_and_def_index(
 
 def _parse_function_ast(
     source_lines: List[str], func_def_index: int, func_name: str
-) -> Optional[ast.FunctionDef]:
+) -> ast.FunctionDef:
     """Parse the function source and return the AST node for the function."""
     # Get source starting from the function definition
     source_from_def = "".join(source_lines[func_def_index:])
@@ -105,23 +107,25 @@ def _parse_function_ast(
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
             return node
 
-    return None
+    raise ValueError(f"Function '{func_name}' not found in source")
 
 
 def _get_function_body_bounds(
-    func_node: Optional[ast.FunctionDef], source_lines: List[str]
-) -> Tuple[Optional[int], Optional[int]]:
+    func_node: ast.FunctionDef, source_lines: List[str]
+) -> Tuple[int, int]:
     """
     Get the line bounds of the function body.
     Returns (first_body_line, last_body_line) relative to the parsed source.
     """
     if not func_node or not func_node.body:
-        return None, None
+        raise ValueError("FIXME")
 
     # The function signature ends with a colon, body starts on next line
     func_def_line = func_node.lineno
     first_body_line = func_def_line + 1
     last_body_line = func_node.body[-1].end_lineno
+    if last_body_line is None:
+        raise ValueError("FIXME")
 
     return first_body_line, last_body_line
 
@@ -434,7 +438,7 @@ def _split_file_at_function(file_path: str, func_name: str) -> Tuple[str, str, s
     return before, body, after, indent
 
 
-def _extract_function_body(func: Callable[..., Any]) -> Optional[str]:
+def _extract_function_body(func: Callable[..., Any]) -> str:
     """
     Extract the body source code of a function.
     Returns the body source as a string or None if extraction fails.
@@ -445,14 +449,8 @@ def _extract_function_body(func: Callable[..., Any]) -> Optional[str]:
     # Parse AST to find function boundaries
     func_node = _parse_function_ast(source_lines, func_def_index, func.__name__)
 
-    if not func_node:
-        return None
-
     # Get body line boundaries
     first_body_line, last_body_line = _get_function_body_bounds(func_node, source_lines)
-
-    if first_body_line is None or last_body_line is None:
-        return None
 
     # Extract and dedent body lines
     body_lines = _extract_body_lines(
@@ -463,76 +461,71 @@ def _extract_function_body(func: Callable[..., Any]) -> Optional[str]:
 
 def _start_kernel_directly(func_name: str, logger: logging.Logger,
                           user_ns: Optional[Dict[str, Any]] = None,
-                          user_module: Optional[Any] = None) -> Tuple[Optional[str], Optional[Any]]:
+                          user_module: Optional[Any] = None) -> Tuple[str, Any]:
     """Start an IPython kernel directly and return the connection file path and app instance.
 
     Returns:
         Tuple of (connection_file_path, kernel_app) or (None, None) if startup failed
     """
+    from ipykernel.kernelapp import IPKernelApp
+    import tempfile
+    import os
+
+    # Generate a unique connection file path (but don't create the file)
+    temp_dir = tempfile.gettempdir()
+    connection_file = os.path.join(temp_dir, f'kernel-{os.getpid()}.json')
+
+    # Remove the file if it exists from a previous run
+    if os.path.exists(connection_file):
+        os.remove(connection_file)
+
+    # Initialize the kernel app with the specific connection file
+    app = IPKernelApp.instance()
+
+    # Store the user namespace and module for later injection
+    app._user_ns_to_inject = user_ns  # type: ignore[attr-defined]
+    app._user_module_to_inject = user_module  # type: ignore[attr-defined]
+
+    # We need to set up a custom initialization to inject our namespace
+    original_init_kernel = app.init_kernel
+
+    def custom_init_kernel() -> None:
+        # Call the original initialization
+        original_init_kernel()
+
+        # Now inject our namespace after kernel is initialized
+        if hasattr(app, '_user_ns_to_inject') and app._user_ns_to_inject:
+            app.kernel.shell.user_ns.update(app._user_ns_to_inject)
+            logger.info(f"Setting user namespace with {len(app._user_ns_to_inject)} variables")
+
+        if hasattr(app, '_user_module_to_inject') and app._user_module_to_inject:
+            app.kernel.shell.user_module = app._user_module_to_inject
+            logger.info(f"Setting user module: {app._user_module_to_inject}")
+
+    # Replace the init method
+    app.init_kernel = custom_init_kernel  # type: ignore[method-assign]
+
+    # Pass the connection file and kernel name as command line arguments
+    kernel_id, display_name, language = _get_kernel_info(func_name)
+    app.initialize([
+        '--IPKernelApp.connection_file=' + connection_file,
+        '--IPKernelApp.kernel_name=' + kernel_id
+    ])
+    logger.info(f"Kernel name: {kernel_id}")
+
+    logger.info(f"Kernel initialized with connection file: {connection_file}")
+
+    # Log the initial connection file contents
     try:
-        from ipykernel.kernelapp import IPKernelApp
-        import tempfile
-        import os
-
-        # Generate a unique connection file path (but don't create the file)
-        temp_dir = tempfile.gettempdir()
-        connection_file = os.path.join(temp_dir, f'kernel-{os.getpid()}.json')
-
-        # Remove the file if it exists from a previous run
-        if os.path.exists(connection_file):
-            os.remove(connection_file)
-
-        # Initialize the kernel app with the specific connection file
-        app = IPKernelApp.instance()
-
-        # Store the user namespace and module for later injection
-        app._user_ns_to_inject = user_ns  # type: ignore[attr-defined]
-        app._user_module_to_inject = user_module  # type: ignore[attr-defined]
-
-        # We need to set up a custom initialization to inject our namespace
-        original_init_kernel = app.init_kernel
-
-        def custom_init_kernel() -> None:
-            # Call the original initialization
-            original_init_kernel()
-
-            # Now inject our namespace after kernel is initialized
-            if hasattr(app, '_user_ns_to_inject') and app._user_ns_to_inject:
-                app.kernel.shell.user_ns.update(app._user_ns_to_inject)
-                logger.info(f"Setting user namespace with {len(app._user_ns_to_inject)} variables")
-
-            if hasattr(app, '_user_module_to_inject') and app._user_module_to_inject:
-                app.kernel.shell.user_module = app._user_module_to_inject
-                logger.info(f"Setting user module: {app._user_module_to_inject}")
-
-        # Replace the init method
-        app.init_kernel = custom_init_kernel  # type: ignore[method-assign]
-
-        # Pass the connection file and kernel name as command line arguments
-        kernel_id, display_name, language = _get_kernel_info(func_name)
-        app.initialize([
-            '--IPKernelApp.connection_file=' + connection_file,
-            '--IPKernelApp.kernel_name=' + kernel_id
-        ])
-        logger.info(f"Kernel name: {kernel_id}")
-
-        logger.info(f"Kernel initialized with connection file: {connection_file}")
-
-        # Log the initial connection file contents
-        try:
-            with open(connection_file, 'r') as f:
-                initial_content = json.load(f)
-                logger.info(f"Initial connection file kernel_name: {initial_content.get('kernel_name', 'NOT SET')}")
-        except Exception as e:
-            logger.warning(f"Could not read initial connection file: {e}")
-
-        # Return both the connection file and the app
-        # The app will be started in the main thread later
-        return connection_file, app
-
+        with open(connection_file, 'r') as f:
+            initial_content = json.load(f)
+            logger.info(f"Initial connection file kernel_name: {initial_content.get('kernel_name', 'NOT SET')}")
     except Exception as e:
-        logger.error(f"Failed to initialize kernel: {e}")
-        return None, None
+        logger.warning(f"Could not read initial connection file: {e}")
+
+    # Return both the connection file and the app
+    # The app will be started in the main thread later
+    return connection_file, app
 
 
 def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, connection_file: Optional[str] = None, func_name: Optional[str] = None) -> None:
@@ -794,27 +787,25 @@ def notebookize(
             return func(*args, **kwargs)
 
         # Extract the function body
-        body_source = _extract_function_body(func)
-
-        if not body_source:
-            logger.error(f"Unable to extract function body for {func.__name__}")
+        try:
+            body_source = _extract_function_body(func)
+        except ValueError as e:
+            logger.error(f"Error extracting function body: {e}")
             return func(*args, **kwargs)
 
         logger.info(f"Original function body for {func.__name__}:")
         logger.info(body_source)
 
         # Always set up kernel
-        # Capture the calling frame's namespace
+        # Capture the function's module namespace
         user_ns = None
         user_module = None
         if extract_module_locals is not None:
-            # Get the calling frame's module and locals
-            frame = inspect.currentframe()
-            if frame and frame.f_back:
-                caller_frame = frame.f_back
-                user_module = inspect.getmodule(caller_frame)
-                # Combine function arguments with caller's locals
-                user_ns = dict(caller_frame.f_locals)
+            # Get the function's module
+            user_module = inspect.getmodule(func)
+            if user_module:
+                # Get the module's globals
+                user_ns = dict(user_module.__dict__)
                 # Add the function arguments
                 sig = inspect.signature(func)
                 bound_args = sig.bind(*args, **kwargs)
@@ -862,14 +853,14 @@ def notebookize(
                     logger.warning(f"Could not read connection file before start: {e}")
 
                 logger.info("Kernel is ready for connections")
-                
+
                 # Set up signal handlers to clean up subprocesses
                 import signal
-                
+
                 def cleanup_handler(signum: int, frame: Any) -> None:
                     # In JupyterLab mode, exit immediately
                     logger.info("Received interrupt signal, cleaning up...")
-                    
+
                     # Kill JupyterLab processes if any
                     global _jupyter_lab_processes
                     for proc in _jupyter_lab_processes:
@@ -882,24 +873,22 @@ def notebookize(
                                 proc.kill()
                     # Raise KeyboardInterrupt to stop the kernel
                     raise KeyboardInterrupt()
-                
+
                 # Install signal handler
                 old_handler = signal.signal(signal.SIGINT, cleanup_handler)
-                
+
                 try:
                     kernel_app.start()  # This blocks until kernel is terminated
                 finally:
                     # Restore original handler
                     signal.signal(signal.SIGINT, old_handler)
-                    
+
             except KeyboardInterrupt:
                 logger.info("Kernel interrupted by user")
                 # Clean up any remaining JupyterLab processes
                 for proc in _jupyter_lab_processes:
                     if proc.poll() is None:
                         proc.terminate()
-            except Exception as e:
-                logger.error(f"Kernel error: {e}")
         else:
             # No kernel, just watch for changes normally
             try:
@@ -908,9 +897,7 @@ def notebookize(
                 logger.info("Watching interrupted by user")
 
         # Never actually call the original function
-        logger.info(f"Watching stopped. Function {func.__name__} was not executed.")
-        return None
+        logger.info(f"Watching {func.__name__} stopped. Exiting program.")
+        sys.exit(0)
 
     return wrapper  # type: ignore[return-value]
-
-
