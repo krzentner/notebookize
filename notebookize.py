@@ -17,6 +17,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Callable, Any, Optional, Tuple, List, Union, TypeVar, Dict
 
+# Global list to track JupyterLab processes for cleanup
+_jupyter_lab_processes: List[subprocess.Popen] = []
+
 try:
     from ipykernel.kernelapp import IPKernelApp
     from IPython.utils.frame import extract_module_locals
@@ -541,6 +544,7 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
         connection_file: Optional connection file to use with --existing
         func_name: Optional function name for kernel identification
     """
+    global _jupyter_lab_processes
     try:
         if connection_file:
             # Create external kernels directory
@@ -587,47 +591,34 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
             # Kernel info is available in the external connection file
 
             # Open JupyterLab with external kernel support
+            # Start JupyterLab with inherited stdout/stderr so it doesn't appear in notebook
             proc = subprocess.Popen(
                 [
                     "jupyter", "lab", str(notebook_path),
                     f"--ServerApp.external_connection_dir={external_kernels_dir}",
                     "--ServerApp.allow_external_kernels=True",
-                    "--debug",  # Enable debug logging
-                    "--log-level=DEBUG"  # Set log level to DEBUG
+                    # "--debug",  # Enable debug logging
+                    # "--log-level=DEBUG"  # Set log level to DEBUG
                 ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                # Inherit parent's stdout/stderr instead of capturing
+                stdout=None,  # Inherits parent's stdout
+                stderr=None   # Inherits parent's stderr
             )
 
             # Store the process for cleanup
-            # Store as attribute on the function for later cleanup
-            if not hasattr(_open_notebook_in_jupyterlab, '_jupyter_processes'):
-                _open_notebook_in_jupyterlab._jupyter_processes = []  # type: ignore[attr-defined]
-            _open_notebook_in_jupyterlab._jupyter_processes.append(proc)  # type: ignore[attr-defined]
-            
-            # Start a thread to capture and log JupyterLab output
-            def log_jupyterlab_output() -> None:
-                if proc.stderr is not None:
-                    for line in proc.stderr:
-                        if line.strip():
-                            # Log kernel-related messages
-                            if any(keyword in line.lower() for keyword in ['kernel', 'external', 'connection']):
-                                logger.info(f"JupyterLab: {line.strip()}")
-
-            import threading
-            log_thread = threading.Thread(target=log_jupyterlab_output, daemon=True)
-            log_thread.start()
+            _jupyter_lab_processes.append(proc)
             logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
             logger.info(f"External kernel '{display_name}' available in: Kernel > Change Kernel > Existing")
             logger.info(f"Kernel UUID: {jupyter_kernel_id}")
         else:
             # Open normally without kernel
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ["jupyter", "lab", str(notebook_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=None,  # Inherit parent's stdout
+                stderr=None   # Inherit parent's stderr
             )
+            # Store for cleanup
+            _jupyter_lab_processes.append(proc)
             logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
 
     except FileNotFoundError:
@@ -927,15 +918,15 @@ def notebookize(
                 def cleanup_handler(signum: int, frame: Any) -> None:
                     logger.info("Received interrupt signal, cleaning up...")
                     # Kill JupyterLab processes if any
-                    if hasattr(_open_notebook_in_jupyterlab, '_jupyter_processes'):
-                        for proc in _open_notebook_in_jupyterlab._jupyter_processes:  # type: ignore[attr-defined]
-                            if proc.poll() is None:  # Still running
-                                logger.info(f"Terminating JupyterLab process (PID: {proc.pid})")
-                                proc.terminate()
-                                try:
-                                    proc.wait(timeout=2)
-                                except subprocess.TimeoutExpired:
-                                    proc.kill()
+                    global _jupyter_lab_processes
+                    for proc in _jupyter_lab_processes:
+                        if proc.poll() is None:  # Still running
+                            logger.info(f"Terminating JupyterLab process (PID: {proc.pid})")
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
                     # Raise KeyboardInterrupt to stop the kernel
                     raise KeyboardInterrupt()
                 
@@ -951,10 +942,9 @@ def notebookize(
             except KeyboardInterrupt:
                 logger.info("Kernel interrupted by user")
                 # Clean up any remaining JupyterLab processes
-                if hasattr(_open_notebook_in_jupyterlab, '_jupyter_processes'):
-                    for proc in _open_notebook_in_jupyterlab._jupyter_processes:  # type: ignore[attr-defined]
-                        if proc.poll() is None:
-                            proc.terminate()
+                for proc in _jupyter_lab_processes:
+                    if proc.poll() is None:
+                        proc.terminate()
             except Exception as e:
                 logger.error(f"Kernel error: {e}")
         else:
