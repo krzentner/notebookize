@@ -1,3 +1,0 @@
-[submodule "ipykernel"]
-	path = subm/ipykernel
-	url = https://github.com/ipython/ipykernel.git
