@@ -83,7 +83,7 @@ if __name__ == "__main__":
         print("✓ Kernel is ready and responding")
         
         # Execute a simple command to test
-        msg_id = client.execute("print('KERNEL_IS_ALIVE')")
+        client.execute("print('KERNEL_IS_ALIVE')")
         
         # Get the output
         outputs = []
@@ -94,7 +94,7 @@ if __name__ == "__main__":
                     outputs.append(msg['content']['text'])
                 elif msg['msg_type'] == 'status' and msg['content']['execution_state'] == 'idle':
                     break
-            except:
+            except Exception:
                 break
         
         print(f"Kernel output: {''.join(outputs)}")
@@ -114,7 +114,7 @@ if 'arg2' in dir():
 if 'TEST_GLOBAL' in dir():
     print('TEST_GLOBAL =', TEST_GLOBAL)
 """
-        msg_id = client.execute(test_code)
+        client.execute(test_code)
         
         # Get the output
         outputs = []
@@ -125,7 +125,7 @@ if 'TEST_GLOBAL' in dir():
                     outputs.append(msg['content']['text'])
                 elif msg['msg_type'] == 'status' and msg['content']['execution_state'] == 'idle':
                     break
-            except:
+            except Exception:
                 break
         
         result = ''.join(outputs)
@@ -233,7 +233,7 @@ print(test_marker)
         # Kill any remaining processes
         try:
             proc.terminate()
-        except:
+        except Exception:
             pass
 
 if __name__ == "__main__":

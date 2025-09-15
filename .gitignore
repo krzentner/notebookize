@@ -3,3 +3,5 @@ __pycache__
 .vscode
 *.txt
 /manual_test_jupyterlab.py
+.coverage
+/demo.py

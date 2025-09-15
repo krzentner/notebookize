@@ -13,6 +13,21 @@ test-all:
     uv run pytest tests/ -v
     @echo "All tests passed!"
 
+# Run tests with coverage
+test-cov:
+    uv run pytest tests/ -v --cov=notebookize --cov-report=term-missing --cov-report=html
+
+# Generate coverage report and show in terminal
+coverage:
+    uv run coverage run -m pytest tests/ -v
+    uv run coverage report -m
+
+# Generate HTML coverage report  
+coverage-html:
+    uv run coverage run -m pytest tests/ -v
+    uv run coverage html
+    @echo "Coverage report generated in htmlcov/"
+
 # Run basic extraction tests
 test-basic:
     uv run pytest tests/test_basic_extraction.py -v

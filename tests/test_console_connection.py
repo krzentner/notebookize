@@ -4,7 +4,6 @@
 import subprocess
 import tempfile
 import time
-import json
 import os
 import sys
 
@@ -79,7 +78,7 @@ if __name__ == "__main__":
             print("✓ Kernel is ready")
             
             # Test that we can execute code
-            msg_id = client.execute("print('Console connection test')")
+            client.execute("print('Console connection test')")
             
             # Get the output
             outputs = []
@@ -90,7 +89,7 @@ if __name__ == "__main__":
                         outputs.append(msg['content']['text'])
                     elif msg['msg_type'] == 'status' and msg['content']['execution_state'] == 'idle':
                         break
-                except:
+                except Exception:
                     break
             
             result = ''.join(outputs)
@@ -108,7 +107,7 @@ if 'arg2' in dir():
 if 'TEST_GLOBAL' in dir():
     print(f'TEST_GLOBAL = {TEST_GLOBAL}')
 """
-            msg_id = client.execute(test_code)
+            client.execute(test_code)
             
             # Get the output
             outputs = []
@@ -119,7 +118,7 @@ if 'TEST_GLOBAL' in dir():
                         outputs.append(msg['content']['text'])
                     elif msg['msg_type'] == 'status' and msg['content']['execution_state'] == 'idle':
                         break
-                except:
+                except Exception:
                     break
             
             namespace_result = ''.join(outputs)
@@ -157,7 +156,7 @@ if 'TEST_GLOBAL' in dir():
         
         try:
             proc.terminate()
-        except:
+        except Exception:
             pass
 
 
