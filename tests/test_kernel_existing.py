@@ -8,9 +8,10 @@ import json
 import os
 import sys
 
+
 def test_kernel_with_existing():
     """Test that we can connect to the kernel with --existing and access the namespace."""
-    
+
     # Create a test script that uses notebookize with kernel=True
     test_script = """
 import sys
@@ -19,7 +20,7 @@ from notebookize import notebookize
 
 TEST_GLOBAL = "I am a global variable"
 
-@notebookize(kernel=True, open_jupyterlab=False)
+@notebookize(open_jupyterlab=False)
 def test_func(arg1, arg2="default"):
     '''Test function with kernel support.'''
     local_var = "I am local"
@@ -34,71 +35,75 @@ def test_func(arg1, arg2="default"):
 if __name__ == "__main__":
     test_func("hello", "world")
 """
-    
+
     # Write the test script
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(test_script)
         test_file = f.name
-    
+
     try:
         # Start the test script in background
         proc = subprocess.Popen(
             [sys.executable, test_file],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
         )
-        
+
         # Give it time to start the kernel
         time.sleep(5)
-        
+
         # Find the connection file - it should be /tmp/kernel-{pid}.json
         connection_file = f"/tmp/kernel-{proc.pid}.json"
-        
+
         if not os.path.exists(connection_file):
             # Try to find any kernel connection file
             import glob
+
             kernel_files = glob.glob("/tmp/kernel-*.json")
             if kernel_files:
                 connection_file = kernel_files[-1]  # Use the most recent
                 print(f"Using connection file: {connection_file}")
             else:
                 raise FileNotFoundError("No kernel connection file found")
-        
+
         # Read connection file to verify it exists and is valid
-        with open(connection_file, 'r') as f:
+        with open(connection_file, "r") as f:
             conn_info = json.load(f)
             print(f"Connection info: {conn_info}")
-        
+
         # First, test if we can connect at all using jupyter_client
         print("\nTesting direct connection with jupyter_client...")
         from jupyter_client import BlockingKernelClient
-        
+
         client = BlockingKernelClient()
         client.load_connection_file(connection_file)
         client.start_channels()
-        
+
         # Wait for kernel to be ready
         client.wait_for_ready(timeout=5)
         print("✓ Kernel is ready and responding")
-        
+
         # Execute a simple command to test
         client.execute("print('KERNEL_IS_ALIVE')")
-        
+
         # Get the output
         outputs = []
         while True:
             try:
                 msg = client.get_iopub_msg(timeout=1)
-                if msg['msg_type'] == 'stream':
-                    outputs.append(msg['content']['text'])
-                elif msg['msg_type'] == 'status' and msg['content']['execution_state'] == 'idle':
+                if msg["msg_type"] == "stream":
+                    outputs.append(msg["content"]["text"])
+                elif (
+                    msg["msg_type"] == "status"
+                    and msg["content"]["execution_state"] == "idle"
+                ):
                     break
             except Exception:
                 break
-        
+
         print(f"Kernel output: {''.join(outputs)}")
-        
+
         # Now test namespace
         print("\nTesting namespace access...")
         test_code = """
@@ -115,24 +120,27 @@ if 'TEST_GLOBAL' in dir():
     print('TEST_GLOBAL =', TEST_GLOBAL)
 """
         client.execute(test_code)
-        
+
         # Get the output
         outputs = []
         while True:
             try:
                 msg = client.get_iopub_msg(timeout=1)
-                if msg['msg_type'] == 'stream':
-                    outputs.append(msg['content']['text'])
-                elif msg['msg_type'] == 'status' and msg['content']['execution_state'] == 'idle':
+                if msg["msg_type"] == "stream":
+                    outputs.append(msg["content"]["text"])
+                elif (
+                    msg["msg_type"] == "status"
+                    and msg["content"]["execution_state"] == "idle"
+                ):
                     break
             except Exception:
                 break
-        
-        result = ''.join(outputs)
+
+        result = "".join(outputs)
         print(f"Namespace test output:\n{result}")
-        
+
         client.stop_channels()
-        
+
         # Create a test script to run in the kernel
         test_commands = """
 import sys
@@ -167,50 +175,50 @@ print("test_func exists:", 'test_func' in dir())
 test_marker = "KERNEL_TEST_SUCCESSFUL"
 print(test_marker)
 """
-        
+
         # Use jupyter console to connect and run commands
         console_proc = subprocess.Popen(
             ["jupyter", "console", "--existing", connection_file],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
         )
-        
+
         # Send our test commands
         output, errors = console_proc.communicate(input=test_commands, timeout=10)
-        
+
         print("Console output:")
         print(output)
-        
+
         if errors:
             print("Console errors:")
             print(errors)
-        
+
         # Check the results
         success = False
         has_args = False
         has_globals = False
-        
+
         if "KERNEL_TEST_SUCCESSFUL" in output:
             success = True
             print("✓ Successfully connected to kernel")
-        
+
         if "arg1 value: hello" in output and "arg2 value: world" in output:
             has_args = True
             print("✓ Function arguments are accessible")
-        
+
         if "TEST_GLOBAL value: I am a global variable" in output:
             has_globals = True
             print("✓ Global variables are accessible")
-        
+
         if "local_var value: I am local" in output:
             print("✓ Local variables are accessible")
-        
+
         # Terminate the background process
         proc.terminate()
         proc.wait(timeout=5)
-        
+
         # Report results
         if success and has_args and has_globals:
             print("\n✅ TEST PASSED: Kernel connection works correctly!")
@@ -224,17 +232,18 @@ print(test_marker)
             if not has_globals:
                 print("  - Global variables not accessible")
             return False
-            
+
     finally:
         # Clean up
         if os.path.exists(test_file):
             os.remove(test_file)
-        
+
         # Kill any remaining processes
         try:
             proc.terminate()
         except Exception:
             pass
+
 
 if __name__ == "__main__":
     success = test_kernel_with_existing()

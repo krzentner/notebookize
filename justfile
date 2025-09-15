@@ -21,6 +21,8 @@ test-cov:
 coverage:
     uv run coverage run -m pytest tests/ -v
     uv run coverage report -m
+    uv run coverage html
+    @echo "HTML coverage report generated in htmlcov/index.html"
 
 # Generate HTML coverage report
 coverage-html:

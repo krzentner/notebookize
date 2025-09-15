@@ -6,6 +6,7 @@ from notebookize import notebookize
 # Global variable that the kernel can access
 GLOBAL_CONFIG = {"version": "1.0", "debug": True}
 
+
 @notebookize
 def process_data(data_list, multiplier=2):
     """Process data with access to function arguments in the kernel.
@@ -26,11 +27,8 @@ def process_data(data_list, multiplier=2):
     total = sum(results)
     average = total / len(results) if results else 0
 
-    return {
-        "results": results,
-        "total": total,
-        "average": average
-    }
+    return {"results": results, "total": total, "average": average}
+
 
 if __name__ == "__main__":
     # Call the decorated function with some test data

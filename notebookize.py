@@ -12,8 +12,6 @@ import uuid
 import time
 import subprocess
 import threading
-import json
-import sys
 
 from pathlib import Path
 from datetime import datetime
@@ -21,13 +19,6 @@ from typing import Callable, Any, Optional, Tuple, List, Union, TypeVar, Dict
 
 # Global list to track JupyterLab processes for cleanup
 _jupyter_lab_processes: List[subprocess.Popen] = []
-
-try:
-    from ipykernel.kernelapp import IPKernelApp
-    from IPython.utils.frame import extract_module_locals
-except ImportError:
-    IPKernelApp = None  # type: ignore
-    extract_module_locals = None  # type: ignore
 
 
 def _get_logger() -> logging.Logger:
@@ -144,16 +135,6 @@ def _extract_body_lines(
     return source_lines[actual_start:actual_end]
 
 
-def _dedent_body_lines(body_lines: List[str]) -> str:
-    """Remove common indentation from body lines while preserving relative indentation."""
-    if not body_lines:
-        return ""
-
-    # Join lines and use textwrap.dedent to remove common leading whitespace
-    body_text = "".join(body_lines)
-    return textwrap.dedent(body_text)
-
-
 def _convert_to_percent_format(body_source: str) -> List[str]:
     """
     Convert function body source to jupytext percent format.
@@ -182,7 +163,7 @@ def _convert_to_percent_format(body_source: str) -> List[str]:
     return cells
 
 
-def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: Optional[str] = None) -> Path:
+def _generate_jupytext_notebook(func_name: str, body_source: str) -> Path:
     """
     Generate a jupytext .py percent format notebook from function source code.
     Returns the path to the generated notebook.
@@ -213,10 +194,10 @@ def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: O
                     "extension": ".py",
                     "format_name": "percent",
                     "format_version": "1.3",
-                    "jupytext_version": "1.16.0"
+                    "jupytext_version": "1.16.0",
                 }
             },
-            "kernelspec": {}  # Will be populated below
+            "kernelspec": {},  # Will be populated below
         }
     }
 
@@ -225,7 +206,7 @@ def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: O
     metadata["jupyter"]["kernelspec"] = {
         "display_name": display_name,
         "language": language,
-        "name": kernel_id
+        "name": kernel_id,
     }
 
     # Generate YAML header with proper formatting
@@ -233,7 +214,7 @@ def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: O
 
     # Format as jupytext header comment
     header_lines = ["# ---"]
-    for line in yaml_str.strip().split('\n'):
+    for line in yaml_str.strip().split("\n"):
         header_lines.append(f"# {line}")
     header_lines.append("# ---")
     header = "\n".join(header_lines)
@@ -367,7 +348,9 @@ def _find_function_end_by_dedent(lines: List[str], body_start_line: int) -> int:
     return len(lines) - 1
 
 
-def _split_file_at_function(file_path: str, func_name: str) -> Tuple[str, str, str, str]:
+def _split_file_at_function(
+    file_path: str, func_name: str
+) -> Tuple[str, str, str, str]:
     """
     Split a file into three parts: before function body, function body, and after function body.
     Returns (before, body, after, indent) where concatenating them gives the original file.
@@ -456,12 +439,15 @@ def _extract_function_body(func: Callable[..., Any]) -> str:
     body_lines = _extract_body_lines(
         source_lines, func_def_index, first_body_line, last_body_line
     )
-    return _dedent_body_lines(body_lines)
+    return textwrap.dedent("".join(body_lines))
 
 
-def _start_kernel_directly(func_name: str, logger: logging.Logger,
-                          user_ns: Optional[Dict[str, Any]] = None,
-                          user_module: Optional[Any] = None) -> Tuple[str, Any]:
+def _start_kernel_directly(
+    func_name: str,
+    logger: logging.Logger,
+    user_ns: Optional[Dict[str, Any]] = None,
+    user_module: Optional[Any] = None,
+) -> Tuple[str, Any]:
     """Start an IPython kernel directly and return the connection file path and app instance.
 
     Returns:
@@ -473,7 +459,7 @@ def _start_kernel_directly(func_name: str, logger: logging.Logger,
 
     # Generate a unique connection file path (but don't create the file)
     temp_dir = tempfile.gettempdir()
-    connection_file = os.path.join(temp_dir, f'kernel-{os.getpid()}.json')
+    connection_file = os.path.join(temp_dir, f"kernel-{os.getpid()}.json")
 
     # Remove the file if it exists from a previous run
     if os.path.exists(connection_file):
@@ -494,11 +480,13 @@ def _start_kernel_directly(func_name: str, logger: logging.Logger,
         original_init_kernel()
 
         # Now inject our namespace after kernel is initialized
-        if hasattr(app, '_user_ns_to_inject') and app._user_ns_to_inject:
+        if hasattr(app, "_user_ns_to_inject") and app._user_ns_to_inject:
             app.kernel.shell.user_ns.update(app._user_ns_to_inject)
-            logger.info(f"Setting user namespace with {len(app._user_ns_to_inject)} variables")
+            logger.info(
+                f"Setting user namespace with {len(app._user_ns_to_inject)} variables"
+            )
 
-        if hasattr(app, '_user_module_to_inject') and app._user_module_to_inject:
+        if hasattr(app, "_user_module_to_inject") and app._user_module_to_inject:
             app.kernel.shell.user_module = app._user_module_to_inject
             logger.info(f"Setting user module: {app._user_module_to_inject}")
 
@@ -507,28 +495,24 @@ def _start_kernel_directly(func_name: str, logger: logging.Logger,
 
     # Pass the connection file and kernel name as command line arguments
     kernel_id, display_name, language = _get_kernel_info(func_name)
-    app.initialize([
-        '--IPKernelApp.connection_file=' + connection_file,
-        '--IPKernelApp.kernel_name=' + kernel_id
-    ])
+    app.initialize(
+        [
+            "--IPKernelApp.connection_file=" + connection_file,
+            "--IPKernelApp.kernel_name=" + kernel_id,
+        ]
+    )
     logger.info(f"Kernel name: {kernel_id}")
 
     logger.info(f"Kernel initialized with connection file: {connection_file}")
-
-    # Log the initial connection file contents
-    try:
-        with open(connection_file, 'r') as f:
-            initial_content = json.load(f)
-            logger.info(f"Initial connection file kernel_name: {initial_content.get('kernel_name', 'NOT SET')}")
-    except Exception as e:
-        logger.warning(f"Could not read initial connection file: {e}")
 
     # Return both the connection file and the app
     # The app will be started in the main thread later
     return connection_file, app
 
 
-def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, connection_file: Optional[str] = None, func_name: Optional[str] = None) -> None:
+def _open_notebook_in_jupyterlab(
+    notebook_path: Path, logger: logging.Logger, connection_file: str, func_name: str
+) -> None:
     """Open the generated .py notebook directly in JupyterLab.
 
     Args:
@@ -539,117 +523,113 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
     """
     global _jupyter_lab_processes
     try:
-        if connection_file:
-            # Create external kernels directory
-            external_kernels_dir = Path("/tmp") / f"notebookize_kernels_{os.getpid()}"
-            external_kernels_dir.mkdir(exist_ok=True)
+        # Create external kernels directory
+        external_kernels_dir = Path("/tmp") / f"notebookize_kernels_{os.getpid()}"
+        external_kernels_dir.mkdir(exist_ok=True)
 
-            # Read and modify connection file to add kernel metadata
-            import json
+        # Read and modify connection file to add kernel metadata
+        import json
 
-            with open(connection_file, 'r') as f:
-                connection_info = json.load(f)
+        with open(connection_file, "r") as f:
+            connection_info = json.load(f)
 
-            # Add kernel metadata for better identification in JupyterLab
-            # Use the passed function name or extract from notebook path
-            if not func_name:
-                func_name = notebook_path.stem.split('_')[0] if '_' in notebook_path.stem else notebook_path.stem
-
-            # Use consistent kernel naming
-            kernel_id, display_name, language = _get_kernel_info(func_name)
-
-            # Generate a UUID for JupyterLab to use as the kernel ID
-            import uuid
-            jupyter_kernel_id = str(uuid.uuid4())
-
-            connection_info['kernel_name'] = kernel_id
-            connection_info['kernel_id'] = jupyter_kernel_id  # JupyterLab needs this
-            connection_info['language'] = language  # Custom language to prevent auto-start
-            connection_info['metadata'] = {
-                'kernel_name': kernel_id,
-                'display_name': display_name,
-                'language': language
-            }
-
-            # Write the enhanced connection file to external kernels directory
-            # Use UUID-based filename that JupyterLab expects
-            external_connection_file = external_kernels_dir / f"kernel-{jupyter_kernel_id}.json"
-            with open(external_connection_file, 'w') as f:
-                json.dump(connection_info, f, indent=2)
-
-            logger.info(f"Created external kernel connection at: {external_connection_file}")
-            logger.info(f"External connection file kernel_name: {connection_info.get('kernel_name', 'NOT SET')}")
-            logger.info(f"External kernel UUID: {jupyter_kernel_id}")
-
-            # Kernel info is available in the external connection file
-
-            # Open JupyterLab with external kernel support
-            # Start JupyterLab with inherited stdout/stderr so it doesn't appear in notebook
-            proc = subprocess.Popen(
-                [
-                    "jupyter", "lab", str(notebook_path),
-                    f"--ServerApp.external_connection_dir={external_kernels_dir}",
-                    "--ServerApp.allow_external_kernels=True",
-                    # "--debug",  # Enable debug logging
-                    # "--log-level=DEBUG"  # Set log level to DEBUG
-                ],
-                # Inherit parent's stdout/stderr instead of capturing
-                stdout=None,  # Inherits parent's stdout
-                stderr=None   # Inherits parent's stderr
+        # Add kernel metadata for better identification in JupyterLab
+        # Use the passed function name or extract from notebook path
+        if not func_name:
+            func_name = (
+                notebook_path.stem.split("_")[0]
+                if "_" in notebook_path.stem
+                else notebook_path.stem
             )
 
-            # Store the process for cleanup
-            _jupyter_lab_processes.append(proc)
-            logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
-            logger.info(f"External kernel '{display_name}' available in: Kernel > Change Kernel > Existing")
-            logger.info(f"Kernel UUID: {jupyter_kernel_id}")
-        else:
-            # Open normally without kernel
-            proc = subprocess.Popen(
-                ["jupyter", "lab", str(notebook_path)],
-                stdout=None,  # Inherit parent's stdout
-                stderr=None   # Inherit parent's stderr
-            )
-            # Store for cleanup
-            _jupyter_lab_processes.append(proc)
-            logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
+        # Use consistent kernel naming
+        kernel_id, display_name, language = _get_kernel_info(func_name)
 
+        # Generate a UUID for JupyterLab to use as the kernel ID
+        import uuid
+
+        jupyter_kernel_id = str(uuid.uuid4())
+
+        connection_info["kernel_name"] = kernel_id
+        connection_info["kernel_id"] = jupyter_kernel_id  # JupyterLab needs this
+        connection_info["language"] = language  # Custom language to prevent auto-start
+        connection_info["metadata"] = {
+            "kernel_name": kernel_id,
+            "display_name": display_name,
+            "language": language,
+        }
+
+        # Write the enhanced connection file to external kernels directory
+        # Use UUID-based filename that JupyterLab expects
+        external_connection_file = (
+            external_kernels_dir / f"kernel-{jupyter_kernel_id}.json"
+        )
+        with open(external_connection_file, "w") as f:
+            json.dump(connection_info, f, indent=2)
+
+        logger.info(
+            f"Created external kernel connection at: {external_connection_file}"
+        )
+        logger.info(
+            f"External connection file kernel_name: {connection_info.get('kernel_name', 'NOT SET')}"
+        )
+        logger.info(f"External kernel UUID: {jupyter_kernel_id}")
+
+        # Kernel info is available in the external connection file
+
+        # Open JupyterLab with external kernel support
+        # Start JupyterLab with inherited stdout/stderr so it doesn't appear in notebook
+        proc = subprocess.Popen(
+            [
+                "jupyter",
+                "lab",
+                str(notebook_path),
+                f"--ServerApp.external_connection_dir={external_kernels_dir}",
+                "--ServerApp.allow_external_kernels=True",
+                # "--debug",  # Enable debug logging
+                # "--log-level=DEBUG"  # Set log level to DEBUG
+            ],
+            # Inherit parent's stdout/stderr instead of capturing
+            stdout=None,  # Inherits parent's stdout
+            stderr=None,  # Inherits parent's stderr
+        )
+
+        # Store the process for cleanup
+        _jupyter_lab_processes.append(proc)
+        logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
+        logger.info(
+            f"External kernel '{display_name}' available in: Kernel > Change Kernel > Existing"
+        )
+        logger.info(f"Kernel UUID: {jupyter_kernel_id}")
     except FileNotFoundError:
         logger.error(
             "JupyterLab not found. Please install with: pip install jupyterlab"
         )
-    except Exception as e:
-        logger.error(f"Error opening JupyterLab: {e}")
-
 
 
 def _extract_function_body_from_source(source_content: str, func_name: str) -> str:
     """Extract function body from source code content."""
-    try:
-        tree = ast.parse(source_content)
+    tree = ast.parse(source_content)
 
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == func_name:
-                # Get the original source lines
-                source_lines = source_content.splitlines()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            # Get the original source lines
+            source_lines = source_content.splitlines()
 
-                # Find function start and end
-                func_start_line = node.lineno - 1  # Convert to 0-based
+            # Find function start and end
+            func_start_line = node.lineno - 1  # Convert to 0-based
 
-                # Find the last line of the function
-                func_end_line = func_start_line
-                for child in ast.walk(node):
-                    if hasattr(child, 'lineno') and child.lineno:
-                        func_end_line = max(func_end_line, child.lineno - 1)
+            # Find the last line of the function
+            func_end_line = func_start_line
+            for child in ast.walk(node):
+                if hasattr(child, "lineno") and child.lineno is not None:
+                    func_end_line = max(func_end_line, child.lineno - 1)
 
-                # Extract function lines (skip the def line)
-                if func_start_line + 1 <= func_end_line:
-                    func_lines = source_lines[func_start_line + 1:func_end_line + 1]
-                    return '\n'.join(func_lines)
-
-        return ""
-    except Exception:
-        return ""
+            # Extract function lines (skip the def line)
+            if func_start_line + 1 <= func_end_line:
+                func_lines = source_lines[func_start_line + 1 : func_end_line + 1]
+                return "\n".join(func_lines)
+    raise ValueError(f"Function '{func_name}' not found in source code.")
 
 
 def _handle_notebook_change(
@@ -666,24 +646,23 @@ def _handle_notebook_change(
         return False
 
     # Get the current function body for diff
-    try:
-        with open(source_file, 'r') as f:
-            source_content = f.read()
-        old_body = _extract_function_body_from_source(source_content, func_name)
-    except Exception as e:
-        logger.warning(f"Could not read current function body for diff: {e}")
-        old_body = ""
+    with open(source_file, "r") as f:
+        source_content = f.read()
+    old_body = _extract_function_body_from_source(source_content, func_name)
 
     # Show diff if we have both old and new content
     if old_body and old_body.strip() != new_body.strip():
         import difflib
-        diff_lines = list(difflib.unified_diff(
-            old_body.splitlines(keepends=True),
-            new_body.splitlines(keepends=True),
-            fromfile=f"{source_file}:{func_name} (before)",
-            tofile=f"{source_file}:{func_name} (after)",
-            lineterm=""
-        ))
+
+        diff_lines = list(
+            difflib.unified_diff(
+                old_body.splitlines(keepends=True),
+                new_body.splitlines(keepends=True),
+                fromfile=f"{source_file}:{func_name} (before)",
+                tofile=f"{source_file}:{func_name} (after)",
+                lineterm="",
+            )
+        )
 
         if diff_lines:
             logger.info("Changes detected:")
@@ -704,14 +683,19 @@ def _handle_notebook_change(
 
 
 def _watch_notebook_for_changes(
-    notebook_path: Path, source_file: str, func_name: str, logger: logging.Logger,
-    write_back: bool = True
+    notebook_path: Path,
+    source_file: str,
+    func_name: str,
+    logger: logging.Logger,
+    write_back: bool = True,
 ) -> None:
     """Watch notebook file for changes and optionally update the source file when detected."""
     logger.info(f"Watching {notebook_path} for changes...")
 
     if not write_back:
-        logger.info("Note: write_back is disabled - changes will NOT be written to source file")
+        logger.info(
+            "Note: write_back is disabled - changes will NOT be written to source file"
+        )
 
     logger.info("Press Ctrl+C to stop watching")
 
@@ -721,41 +705,31 @@ def _watch_notebook_for_changes(
     try:
         while True:
             time.sleep(check_interval)
-
             try:
                 current_mtime = notebook_path.stat().st_mtime
-
                 if current_mtime > last_mtime:
                     last_mtime = current_mtime
                     logger.info("Change detected in notebook")
-
                     if write_back:
                         _handle_notebook_change(
                             notebook_path, source_file, func_name, logger
                         )
                     else:
-                        logger.info(f"Notebook {notebook_path.name} changed (write_back disabled)")
-
+                        logger.info(
+                            f"Notebook {notebook_path.name} changed (write_back disabled)"
+                        )
             except FileNotFoundError:
                 logger.error(f"Notebook {notebook_path} was deleted")
                 break
-            except Exception as e:
-                logger.error(f"Error checking notebook: {e}")
-
     except KeyboardInterrupt:
         logger.info("Stopped watching for changes")
-
-
-
 
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
 def notebookize(
-    func: Optional[F] = None, *,
-    open_jupyterlab: bool = True,
-    write_back: bool = True
+    func: Optional[F] = None, *, open_jupyterlab: bool = True, write_back: bool = True
 ) -> Union[F, Callable[[F], F]]:
     """
     Decorator that generates a jupytext notebook and watches for changes,
@@ -768,8 +742,7 @@ def notebookize(
     """
     if func is None:
         return functools.partial(  # type: ignore[return-value]
-            notebookize, open_jupyterlab=open_jupyterlab,
-            write_back=write_back
+            notebookize, open_jupyterlab=open_jupyterlab, write_back=write_back
         )
 
     logger = _get_logger()
@@ -777,13 +750,9 @@ def notebookize(
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Optional[Any]:
         # Get the source file path of the function
-        try:
-            source_file = inspect.getsourcefile(func)
-            if not source_file:
-                logger.error(f"Cannot determine source file for {func.__name__}")
-                return func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Error getting source file: {e}")
+        source_file = inspect.getsourcefile(func)
+        if not source_file:
+            logger.error(f"Cannot determine source file for {func.__name__}")
             return func(*args, **kwargs)
 
         # Extract the function body
@@ -800,104 +769,87 @@ def notebookize(
         # Capture the function's module namespace
         user_ns = None
         user_module = None
-        if extract_module_locals is not None:
-            # Get the function's module
-            user_module = inspect.getmodule(func)
-            if user_module:
-                # Get the module's globals
-                user_ns = dict(user_module.__dict__)
-                # Add the function arguments
-                sig = inspect.signature(func)
-                bound_args = sig.bind(*args, **kwargs)
-                bound_args.apply_defaults()
-                user_ns.update(bound_args.arguments)
+        # Get the function's module
+        user_module = inspect.getmodule(func)
+        if user_module:
+            # Get the module's globals
+            user_ns = dict(user_module.__dict__)
+            # Add the function arguments
+            sig = inspect.signature(func)
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
+            user_ns.update(bound_args.arguments)
 
         # Initialize kernel and get connection file
-        connection_file, kernel_app = _start_kernel_directly(func.__name__, logger, user_ns, user_module)
+        connection_file, kernel_app = _start_kernel_directly(
+            func.__name__, logger, user_ns, user_module
+        )
 
         # Generate jupytext notebook with kernel name (always enabled)
-        try:
-            # Pass a kernel name since we always have a kernel running
-            kernel_name = "kernel" if connection_file else None
-            notebook_path = _generate_jupytext_notebook(func.__name__, body_source, kernel_name)
-            logger.info(f"Notebook saved to: {notebook_path}")
-        except Exception as e:
-            logger.error(f"Failed to generate notebook: {e}")
-            return func(*args, **kwargs)
+        notebook_path = _generate_jupytext_notebook(func.__name__, body_source)
+        logger.info(f"Notebook saved to: {notebook_path}")
 
         # Open in JupyterLab if requested
         if open_jupyterlab:
-            _open_notebook_in_jupyterlab(notebook_path, logger, connection_file, func.__name__)
-
-        # If we have a kernel, we need to run it in the main thread
-        if kernel_app and connection_file:
-            # Start file watching in a background thread
-            watch_thread = threading.Thread(
-                target=_watch_notebook_for_changes,
-                args=(notebook_path, source_file, func.__name__, logger, write_back),
-                daemon=True
+            _open_notebook_in_jupyterlab(
+                notebook_path, logger, connection_file, func.__name__
             )
-            watch_thread.start()
 
-            # Run the kernel in the main thread (for JupyterLab mode)
-            try:
-                logger.info("Starting IPython kernel in main thread...")
-                logger.info(f"Connection file: {connection_file}")
+        # Start file watching in a background thread
+        watch_thread = threading.Thread(
+            target=_watch_notebook_for_changes,
+            args=(notebook_path, source_file, func.__name__, logger, write_back),
+            daemon=True,
+        )
+        watch_thread.start()
 
-                # Check the connection file contents before starting kernel
-                try:
-                    with open(connection_file, 'r') as f:
-                        content = json.load(f)
-                        logger.info(f"Connection file before kernel start - kernel_name: {content.get('kernel_name', 'NOT SET')}")
-                except Exception as e:
-                    logger.warning(f"Could not read connection file before start: {e}")
+        # Run the kernel in the main thread (for JupyterLab mode)
+        try:
+            logger.info("Starting IPython kernel in main thread...")
+            logger.info(f"Connection file: {connection_file}")
+            logger.info("Kernel is ready for connections")
 
-                logger.info("Kernel is ready for connections")
+            # Set up signal handlers to clean up subprocesses
+            import signal
 
-                # Set up signal handlers to clean up subprocesses
-                import signal
+            def cleanup_handler(signum: int, frame: Any) -> None:
+                _ = signum, frame  # Required by signal handler signature
+                # In JupyterLab mode, exit immediately
+                logger.info("Received interrupt signal, cleaning up...")
 
-                def cleanup_handler(signum: int, frame: Any) -> None:
-                    # In JupyterLab mode, exit immediately
-                    logger.info("Received interrupt signal, cleaning up...")
-
-                    # Kill JupyterLab processes if any
-                    global _jupyter_lab_processes
-                    for proc in _jupyter_lab_processes:
-                        if proc.poll() is None:  # Still running
-                            logger.info(f"Terminating JupyterLab process (PID: {proc.pid})")
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=2)
-                            except subprocess.TimeoutExpired:
-                                proc.kill()
-                    # Raise KeyboardInterrupt to stop the kernel
-                    raise KeyboardInterrupt()
-
-                # Install signal handler
-                old_handler = signal.signal(signal.SIGINT, cleanup_handler)
-
-                try:
-                    kernel_app.start()  # This blocks until kernel is terminated
-                finally:
-                    # Restore original handler
-                    signal.signal(signal.SIGINT, old_handler)
-
-            except KeyboardInterrupt:
-                logger.info("Kernel interrupted by user")
-                # Clean up any remaining JupyterLab processes
+                # Kill JupyterLab processes if any
+                global _jupyter_lab_processes
                 for proc in _jupyter_lab_processes:
-                    if proc.poll() is None:
+                    if proc.poll() is None:  # Still running
+                        logger.info(f"Terminating JupyterLab process (PID: {proc.pid})")
                         proc.terminate()
-        else:
-            # No kernel, just watch for changes normally
-            try:
-                _watch_notebook_for_changes(notebook_path, source_file, func.__name__, logger, write_back)
-            except KeyboardInterrupt:
-                logger.info("Watching interrupted by user")
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                # Raise KeyboardInterrupt to stop the kernel
+                raise KeyboardInterrupt()
 
-        # Never actually call the original function
-        logger.info(f"Watching {func.__name__} stopped. Exiting program.")
-        sys.exit(0)
+            # Install signal handler
+            old_handler = signal.signal(signal.SIGINT, cleanup_handler)
+
+            try:
+                kernel_app.start()  # This blocks until kernel is terminated
+            finally:
+                # Restore original handler
+                signal.signal(signal.SIGINT, old_handler)
+
+        except KeyboardInterrupt:
+            logger.info("Kernel interrupted by user")
+            # Clean up any remaining JupyterLab processes
+            for proc in _jupyter_lab_processes:
+                if proc.poll() is None:
+                    proc.terminate()
+
+        # Execute the function with potentially updated source
+        logger.info(f"Watching stopped. Function {func.__name__} was not executed.")
+
+        # Return None since the function was used for notebook editing, not execution
+        return None
 
     return wrapper  # type: ignore[return-value]

@@ -25,6 +25,7 @@ os.environ["NOTEBOOKIZE_PATH"] = temp_dir
 print(f"Notebooks will be saved to: {temp_dir}")
 print("=" * 60)
 
+
 @notebookize(open_jupyterlab=True)
 def fibonacci_explorer():
     """Explore Fibonacci numbers interactively."""
@@ -46,12 +47,13 @@ def fibonacci_explorer():
     # Yoooooooo
     ratios = []
     for i in range(2, len(fib)):
-        ratio = fib[i] / fib[i-1]
+        ratio = fib[i] / fib[i - 1]
         ratios.append(ratio)
-        print(f"F({i})/F({i-1}) = {ratio:.10f}")
+        print(f"F({i})/F({i - 1}) = {ratio:.10f}")
 
     # The golden ratio
     import math
+
     phi = (1 + math.sqrt(5)) / 2
     print(f"\nGolden ratio (phi) = {phi:.10f}")
 
@@ -63,6 +65,7 @@ def fibonacci_explorer():
 
     return fib, ratios
 
+
 if __name__ == "__main__":
     print("Starting notebookize with JupyterLab...")
     print("This will:")
@@ -73,6 +76,6 @@ if __name__ == "__main__":
     print("5. Sync changes back to this source file")
     print("\nPress Ctrl+C to stop watching for changes")
     print("=" * 60)
-    
+
     # This will open JupyterLab and start watching
     fibonacci_explorer()
