@@ -13,16 +13,9 @@ import time
 import subprocess
 import threading
 import json
-import tempfile
-import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Any, Optional, Tuple, List, Union, TypeVar, Dict
-
-try:
-    import zmq
-except ImportError:
-    zmq = None  # type: ignore
 
 try:
     from ipykernel.kernelapp import IPKernelApp
@@ -801,118 +794,6 @@ def _watch_notebook_for_changes(
 
 
 
-def _unregister_kernel(kernel_name: str) -> None:
-    """Unregister the kernel from Jupyter."""
-    logger = _get_logger()
-
-    try:
-        subprocess.run(
-            ["jupyter", "kernelspec", "remove", kernel_name, "-f"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        logger.info(f"Unregistered kernel: {kernel_name}")
-    except subprocess.CalledProcessError:
-        pass  # Kernel might not exist
-    except FileNotFoundError:
-        pass  # jupyter command not found
-
-
-def _setup_kernel_if_requested(func_name: str, kernel_enabled: bool, logger: logging.Logger,
-                               user_ns: Optional[Dict[str, Any]] = None,
-                               user_module: Optional[Any] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    """Set up a kernel for the notebook if requested.
-
-    Args:
-        func_name: Name of the decorated function
-        kernel_enabled: Whether to enable kernel
-        logger: Logger instance
-        user_ns: User namespace (locals) to provide to the kernel
-        user_module: Module to provide to the kernel
-
-    Returns:
-        Tuple of (kernel_name, kernel_info) where kernel_info contains connection details,
-        or (None, None) if kernel not set up.
-    """
-    if not kernel_enabled:
-        return None, None
-
-    if IPKernelApp is None or extract_module_locals is None:
-        logger.warning("ipykernel not installed, kernel mode disabled")
-        return None, None
-
-    # Find a free port for ZMQ communication
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        s.listen(1)
-        port = s.getsockname()[1]
-
-    # Generate a unique kernel name
-    kernel_id = str(uuid.uuid4())[:8]
-    kernel_name = f"notebookize-{func_name}-{kernel_id}"
-
-    # Create a temporary connection file with initial data
-    connection_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-    connection_file_path = connection_file.name
-
-    # Write initial connection data (ports will be filled in by kernel)
-    initial_connection_info = {
-        "shell_port": 0,
-        "iopub_port": 0,
-        "stdin_port": 0,
-        "control_port": 0,
-        "hb_port": 0,
-        "ip": "127.0.0.1",
-        "key": str(uuid.uuid4()),
-        "transport": "tcp",
-        "signature_scheme": "hmac-sha256",
-        "kernel_name": kernel_name
-    }
-    json.dump(initial_connection_info, connection_file)
-    connection_file.close()
-
-    # Create kernel.json for registration
-    kernel_spec = {
-        "argv": [
-            sys.executable, "-m", "notebookize",
-            "start-kernel", str(port), "{connection_file}"
-        ],
-        "display_name": f"Notebookize - {func_name}",
-        "language": "python",
-        "metadata": {"notebookize": True}
-    }
-
-    # Register the kernel
-    kernel_dir = Path(tempfile.mkdtemp(prefix="notebookize-kernel-"))
-    kernel_json_path = kernel_dir / "kernel.json"
-    with open(kernel_json_path, 'w') as f:
-        json.dump(kernel_spec, f, indent=2)
-
-    try:
-        subprocess.run(
-            ["jupyter", "kernelspec", "install", str(kernel_dir), "--name", kernel_name, "--user"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        logger.info(f"Registered kernel: {kernel_name}")
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        logger.error(f"Failed to register kernel: {e}")
-        return None, None
-
-    # Return kernel info to be started in main thread
-    kernel_info = {
-        "name": kernel_name,
-        "port": port,
-        "connection_file": connection_file_path,
-        "user_ns": user_ns,
-        "user_module": user_module
-    }
-
-    return kernel_name, kernel_info
-
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -1052,43 +933,3 @@ def notebookize(
     return wrapper  # type: ignore[return-value]
 
 
-def _read_connection_file(connection_file: str) -> Dict[str, Any]:
-    """Read and parse a kernel connection file."""
-    try:
-        with open(connection_file, 'r') as f:
-            data = json.load(f)
-            return data  # type: ignore[no-any-return]
-    except Exception as e:
-        print(f"Error reading connection file: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _send_connection_to_decorator(port: int, connection_data: Dict[str, Any]) -> None:
-    """Send connection data to the decorator's ZMQ socket."""
-    context = zmq.Context()
-    socket = context.socket(zmq.REQ)
-    socket.connect(f"tcp://127.0.0.1:{port}")
-
-    try:
-        # Send connection file data
-        socket.send_json(connection_data)
-
-        # Wait for acknowledgment
-        socket.setsockopt(zmq.RCVTIMEO, 5000)  # 5 second timeout
-        reply = socket.recv_json()
-
-        if not isinstance(reply, dict) or reply.get("status") != "ok":
-            print(f"Unexpected reply: {reply}", file=sys.stderr)
-            sys.exit(1)
-
-        print(f"Successfully sent connection file to port {port}")
-
-    except zmq.error.Again:
-        print(f"Timeout waiting for acknowledgment from port {port}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error sending connection file: {e}", file=sys.stderr)
-        sys.exit(1)
-    finally:
-        socket.close()
-        context.term()
