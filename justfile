@@ -48,12 +48,42 @@ clean:
     find . -type d -name "*.egg-info" -exec rm -rf {} +
     find . -type d -name ".ipynb_checkpoints" -exec rm -rf {} +
 
-# Clean up any leftover notebookize kernels
+# Clean up any leftover notebookize kernels and connection files
 clean-kernels:
     #!/usr/bin/env bash
-    echo "Cleaning up notebookize kernels..."
+    echo "Cleaning up notebookize kernels and connection files..."
+    
+    # Remove notebookize kernelspecs
     uv run jupyter kernelspec list 2>/dev/null | grep "notebookize-" | sed 's/^[[:space:]]*//' | awk '{print $1}' | while read kernel; do
-        echo "Removing kernel: $kernel"
+        echo "Removing kernelspec: $kernel"
         uv run jupyter kernelspec remove "$kernel" -f 2>/dev/null || true
     done
-    echo "Done cleaning kernels"
+    
+    # Remove external kernel connection directories
+    for dir in /tmp/notebookize_kernels_*; do
+        if [ -d "$dir" ]; then
+            echo "Removing external kernel dir: $dir"
+            rm -rf "$dir"
+        fi
+    done
+    
+    # Remove kernel connection files
+    for file in /tmp/kernel-*.json; do
+        if [ -f "$file" ]; then
+            echo "Removing connection file: $file"
+            rm -f "$file"
+        fi
+    done
+    
+    # Remove runtime connection files
+    runtime_dir="$HOME/.local/share/jupyter/runtime"
+    if [ -d "$runtime_dir" ]; then
+        for file in "$runtime_dir"/kernel-*.json; do
+            if [ -f "$file" ]; then
+                echo "Removing runtime connection file: $file"
+                rm -f "$file"
+            fi
+        done
+    fi
+    
+    echo "Cleanup complete"

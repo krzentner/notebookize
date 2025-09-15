@@ -47,19 +47,21 @@ def _get_logger() -> logging.Logger:
     return logger
 
 
-def _get_kernel_info(func_name: str) -> Tuple[str, str]:
-    """Generate consistent kernel ID and display name.
+def _get_kernel_info(func_name: str) -> Tuple[str, str, str]:
+    """Generate consistent kernel ID, display name, and language.
     
     Args:
         func_name: Name of the function
         
     Returns:
-        Tuple of (kernel_id, display_name)
+        Tuple of (kernel_id, display_name, language)
     """
     pid = os.getpid()
     kernel_id = f"notebookize-{func_name.lower()}-{pid}"
     display_name = f"Notebookize: {func_name} (PID {pid})"
-    return kernel_id, display_name
+    # Use a custom language identifier to prevent auto-starting Python kernels
+    language = "python-notebookize"
+    return kernel_id, display_name, language
 
 
 def _get_notebook_dir() -> Path:
@@ -217,13 +219,12 @@ def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: O
         }
     }
     
-    # Add kernel spec
-    # Use python3 as the default kernelspec since we're using external kernels
-    # Users will need to select the external kernel from the kernel menu
+    # Use our custom kernel with custom language
+    kernel_id, display_name, language = _get_kernel_info(func_name)
     metadata["jupyter"]["kernelspec"] = {
-        "display_name": "Python 3",
-        "language": "python",
-        "name": "python3"
+        "display_name": display_name,
+        "language": language,
+        "name": kernel_id
     }
     
     # Generate YAML header with proper formatting
@@ -511,7 +512,7 @@ def _start_kernel_directly(func_name: str, logger: logging.Logger,
         app.init_kernel = custom_init_kernel
         
         # Pass the connection file and kernel name as command line arguments
-        kernel_id, display_name = _get_kernel_info(func_name)
+        kernel_id, display_name, language = _get_kernel_info(func_name)
         app.initialize([
             '--IPKernelApp.connection_file=' + connection_file,
             '--IPKernelApp.kernel_name=' + kernel_id
@@ -564,7 +565,7 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
                 func_name = notebook_path.stem.split('_')[0] if '_' in notebook_path.stem else notebook_path.stem
             
             # Use consistent kernel naming
-            kernel_id, display_name = _get_kernel_info(func_name)
+            kernel_id, display_name, language = _get_kernel_info(func_name)
             
             # Generate a UUID for JupyterLab to use as the kernel ID
             import uuid
@@ -572,9 +573,11 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
             
             connection_info['kernel_name'] = kernel_id
             connection_info['kernel_id'] = jupyter_kernel_id  # JupyterLab needs this
+            connection_info['language'] = language  # Custom language to prevent auto-start
             connection_info['metadata'] = {
                 'kernel_name': kernel_id,
-                'display_name': display_name
+                'display_name': display_name,
+                'language': language
             }
             
             # Write the enhanced connection file to external kernels directory
