@@ -47,6 +47,21 @@ def _get_logger() -> logging.Logger:
     return logger
 
 
+def _get_kernel_info(func_name: str) -> Tuple[str, str]:
+    """Generate consistent kernel ID and display name.
+    
+    Args:
+        func_name: Name of the function
+        
+    Returns:
+        Tuple of (kernel_id, display_name)
+    """
+    pid = os.getpid()
+    kernel_id = f"notebookize-{func_name.lower()}-{pid}"
+    display_name = f"Notebookize: {func_name} (PID {pid})"
+    return kernel_id, display_name
+
+
 def _get_notebook_dir() -> Path:
     """Get the directory for saving notebooks from environment variable or default."""
     notebook_dir = os.environ.get("NOTEBOOKIZE_PATH", "~/notebooks/")
@@ -202,22 +217,14 @@ def _generate_jupytext_notebook(func_name: str, body_source: str, kernel_name: O
         }
     }
     
-    # Add kernel spec if kernel is enabled
-    if kernel_name:
-        pid = os.getpid()
-        kernel_id = f"notebookize-{func_name.lower()}-{pid}"
-        display_name = f"Notebookize: {func_name} (PID {pid})"
-        metadata["jupyter"]["kernelspec"] = {
-            "display_name": display_name,
-            "language": "python",
-            "name": kernel_id
-        }
-    else:
-        metadata["jupyter"]["kernelspec"] = {
-            "display_name": "Python 3",
-            "language": "python",
-            "name": "python3"
-        }
+    # Add kernel spec
+    # Use python3 as the default kernelspec since we're using external kernels
+    # Users will need to select the external kernel from the kernel menu
+    metadata["jupyter"]["kernelspec"] = {
+        "display_name": "Python 3",
+        "language": "python",
+        "name": "python3"
+    }
     
     # Generate YAML header with proper formatting
     yaml_str = yaml.dump(metadata, default_flow_style=False, sort_keys=False)
@@ -504,15 +511,22 @@ def _start_kernel_directly(func_name: str, logger: logging.Logger,
         app.init_kernel = custom_init_kernel
         
         # Pass the connection file and kernel name as command line arguments
-        # Use PID in kernel name for uniqueness
-        kernel_name = f"notebookize-{func_name}-{os.getpid()}"
+        kernel_id, display_name = _get_kernel_info(func_name)
         app.initialize([
             '--IPKernelApp.connection_file=' + connection_file,
-            '--IPKernelApp.kernel_name=' + kernel_name
+            '--IPKernelApp.kernel_name=' + kernel_id
         ])
-        logger.info(f"Kernel name: {kernel_name}")
+        logger.info(f"Kernel name: {kernel_id}")
         
         logger.info(f"Kernel initialized with connection file: {connection_file}")
+        
+        # Log the initial connection file contents
+        try:
+            with open(connection_file, 'r') as f:
+                initial_content = json.load(f)
+                logger.info(f"Initial connection file kernel_name: {initial_content.get('kernel_name', 'NOT SET')}")
+        except Exception as e:
+            logger.warning(f"Could not read initial connection file: {e}")
         
         # Return both the connection file and the app
         # The app will be started in the main thread later
@@ -523,17 +537,18 @@ def _start_kernel_directly(func_name: str, logger: logging.Logger,
         return None, None
 
 
-def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, connection_file: Optional[str] = None) -> None:
+def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, connection_file: Optional[str] = None, func_name: Optional[str] = None) -> None:
     """Open the generated .py notebook directly in JupyterLab.
     
     Args:
         notebook_path: Path to the .py notebook file
         logger: Logger instance
         connection_file: Optional connection file to use with --existing
+        func_name: Optional function name for kernel identification
     """
     try:
         if connection_file:
-            # Create external kernels directory in /tmp
+            # Create external kernels directory
             external_kernels_dir = Path("/tmp") / f"notebookize_kernels_{os.getpid()}"
             external_kernels_dir.mkdir(exist_ok=True)
             
@@ -544,34 +559,69 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
                 connection_info = json.load(f)
             
             # Add kernel metadata for better identification in JupyterLab
-            # Extract function name from notebook path for context
-            func_name = notebook_path.stem.split('_')[0] if '_' in notebook_path.stem else notebook_path.stem
+            # Use the passed function name or extract from notebook path
+            if not func_name:
+                func_name = notebook_path.stem.split('_')[0] if '_' in notebook_path.stem else notebook_path.stem
             
-            connection_info['kernel_name'] = f"Notebookize: {func_name}"
+            # Use consistent kernel naming
+            kernel_id, display_name = _get_kernel_info(func_name)
+            
+            # Generate a UUID for JupyterLab to use as the kernel ID
+            import uuid
+            jupyter_kernel_id = str(uuid.uuid4())
+            
+            connection_info['kernel_name'] = kernel_id
+            connection_info['kernel_id'] = jupyter_kernel_id  # JupyterLab needs this
             connection_info['metadata'] = {
-                'kernel_name': f"Notebookize: {func_name}",
-                'display_name': f"Notebookize: {func_name} (PID {os.getpid()})"
+                'kernel_name': kernel_id,
+                'display_name': display_name
             }
             
             # Write the enhanced connection file to external kernels directory
-            external_connection_file = external_kernels_dir / os.path.basename(connection_file)
+            # Use UUID-based filename that JupyterLab expects
+            external_connection_file = external_kernels_dir / f"kernel-{jupyter_kernel_id}.json"
             with open(external_connection_file, 'w') as f:
                 json.dump(connection_info, f, indent=2)
             
             logger.info(f"Created external kernel connection at: {external_connection_file}")
+            logger.info(f"External connection file kernel_name: {connection_info.get('kernel_name', 'NOT SET')}")
+            logger.info(f"External kernel UUID: {jupyter_kernel_id}")
+            
+            # Return the kernel ID for use in notebook
+            kernel_info = {
+                'kernel_id': jupyter_kernel_id,
+                'kernel_name': kernel_id,
+                'display_name': display_name
+            }
             
             # Open JupyterLab with external kernel support
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 [
                     "jupyter", "lab", str(notebook_path),
                     f"--ServerApp.external_connection_dir={external_kernels_dir}",
-                    "--ServerApp.allow_external_kernels=True"
+                    "--ServerApp.allow_external_kernels=True",
+                    "--debug",  # Enable debug logging
+                    "--log-level=DEBUG"  # Set log level to DEBUG
                 ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
+            
+            # Start a thread to capture and log JupyterLab output
+            def log_jupyterlab_output():
+                for line in proc.stderr:
+                    if line.strip():
+                        # Log kernel-related messages
+                        if any(keyword in line.lower() for keyword in ['kernel', 'external', 'connection']):
+                            logger.info(f"JupyterLab: {line.strip()}")
+            
+            import threading
+            log_thread = threading.Thread(target=log_jupyterlab_output, daemon=True)
+            log_thread.start()
             logger.info(f"Opened JupyterLab with notebook: {notebook_path}")
-            logger.info(f"Kernel '{func_name}' should be available in: Kernel > Change Kernel")
+            logger.info(f"External kernel '{display_name}' available in: Kernel > Change Kernel > Existing")
+            logger.info(f"Kernel UUID: {jupyter_kernel_id}")
         else:
             # Open normally without kernel
             subprocess.Popen(
@@ -991,7 +1041,7 @@ def notebookize(
         
         # Open in JupyterLab if requested
         if open_jupyterlab:
-            _open_notebook_in_jupyterlab(notebook_path, logger, connection_file)
+            _open_notebook_in_jupyterlab(notebook_path, logger, connection_file, func.__name__)
         
         # Open console if requested (requires kernel)
         if open_console and connection_file:
@@ -1013,6 +1063,15 @@ def notebookize(
             try:
                 logger.info("Starting IPython kernel in main thread...")
                 logger.info(f"Connection file: {connection_file}")
+                
+                # Check the connection file contents before starting kernel
+                try:
+                    with open(connection_file, 'r') as f:
+                        content = json.load(f)
+                        logger.info(f"Connection file before kernel start - kernel_name: {content.get('kernel_name', 'NOT SET')}")
+                except Exception as e:
+                    logger.warning(f"Could not read connection file before start: {e}")
+                
                 logger.info("Kernel is ready for connections")
                 kernel_app.start()  # This blocks until kernel is terminated
             except KeyboardInterrupt:
