@@ -600,6 +600,12 @@ def _open_notebook_in_jupyterlab(notebook_path: Path, logger: logging.Logger, co
                 text=True
             )
 
+            # Store the process for cleanup
+            # Store as attribute on the function for later cleanup
+            if not hasattr(_open_notebook_in_jupyterlab, '_jupyter_processes'):
+                _open_notebook_in_jupyterlab._jupyter_processes = []  # type: ignore[attr-defined]
+            _open_notebook_in_jupyterlab._jupyter_processes.append(proc)  # type: ignore[attr-defined]
+            
             # Start a thread to capture and log JupyterLab output
             def log_jupyterlab_output() -> None:
                 if proc.stderr is not None:
@@ -914,9 +920,41 @@ def notebookize(
                     logger.warning(f"Could not read connection file before start: {e}")
 
                 logger.info("Kernel is ready for connections")
-                kernel_app.start()  # This blocks until kernel is terminated
+                
+                # Set up signal handlers to clean up subprocesses
+                import signal
+                
+                def cleanup_handler(signum: int, frame: Any) -> None:
+                    logger.info("Received interrupt signal, cleaning up...")
+                    # Kill JupyterLab processes if any
+                    if hasattr(_open_notebook_in_jupyterlab, '_jupyter_processes'):
+                        for proc in _open_notebook_in_jupyterlab._jupyter_processes:  # type: ignore[attr-defined]
+                            if proc.poll() is None:  # Still running
+                                logger.info(f"Terminating JupyterLab process (PID: {proc.pid})")
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=2)
+                                except subprocess.TimeoutExpired:
+                                    proc.kill()
+                    # Raise KeyboardInterrupt to stop the kernel
+                    raise KeyboardInterrupt()
+                
+                # Install signal handler
+                old_handler = signal.signal(signal.SIGINT, cleanup_handler)
+                
+                try:
+                    kernel_app.start()  # This blocks until kernel is terminated
+                finally:
+                    # Restore original handler
+                    signal.signal(signal.SIGINT, old_handler)
+                    
             except KeyboardInterrupt:
                 logger.info("Kernel interrupted by user")
+                # Clean up any remaining JupyterLab processes
+                if hasattr(_open_notebook_in_jupyterlab, '_jupyter_processes'):
+                    for proc in _open_notebook_in_jupyterlab._jupyter_processes:  # type: ignore[attr-defined]
+                        if proc.poll() is None:
+                            proc.terminate()
             except Exception as e:
                 logger.error(f"Kernel error: {e}")
         else:
