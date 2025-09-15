@@ -114,7 +114,9 @@ def test_notebook_generation(tmp_path, monkeypatch):
 y = x * 2
 return y"""
 
-    notebook_path = _generate_jupytext_notebook("test_func", body_source)
+    # Use a test source file path
+    test_source_file = "/tmp/test_source.py"
+    notebook_path = _generate_jupytext_notebook("test_func", body_source, test_source_file)
 
     # Check that notebook was created
     assert notebook_path.exists()

@@ -53,11 +53,23 @@ def _get_kernel_info(func_name: str) -> Tuple[str, str, str]:
     return kernel_id, display_name, language
 
 
-def _get_notebook_dir() -> Path:
-    """Get the directory for saving notebooks from environment variable or default."""
-    notebook_dir = os.environ.get("NOTEBOOKIZE_PATH", "~/notebooks/")
-    notebook_dir = os.path.expanduser(notebook_dir)
-    return Path(notebook_dir)
+def _get_notebook_dir(source_file: str) -> Path:
+    """Get the directory for saving notebooks.
+
+    Args:
+        source_file: Optional path to the source file. If provided, notebook will be
+                    saved in the same directory as the source file.
+
+    Returns:
+        Path to the directory where notebooks should be saved.
+    """
+    # First check environment variable
+    if "NOTEBOOKIZE_PATH" in os.environ:
+        notebook_dir = os.environ["NOTEBOOKIZE_PATH"]
+        notebook_dir = os.path.expanduser(notebook_dir)
+        return Path(notebook_dir)
+
+    return Path(source_file).parent
 
 
 def _get_function_source_and_def_index(
@@ -163,7 +175,7 @@ def _convert_to_percent_format(body_source: str) -> List[str]:
     return cells
 
 
-def _generate_jupytext_notebook(func_name: str, body_source: str) -> Path:
+def _generate_jupytext_notebook(func_name: str, body_source: str, source_file: str) -> Path:
     """
     Generate a jupytext .py percent format notebook from function source code.
     Returns the path to the generated notebook.
@@ -171,13 +183,13 @@ def _generate_jupytext_notebook(func_name: str, body_source: str) -> Path:
     import yaml
 
     # Create notebook directory if it doesn't exist
-    notebook_dir = _get_notebook_dir()
+    notebook_dir = _get_notebook_dir(source_file)
     notebook_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate a unique filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = str(uuid.uuid4())[:8]
-    filename = f"{func_name}_{timestamp}_{unique_id}.py"
+    filename = f"{func_name}_{timestamp}_{unique_id}.jupytext.py"
     notebook_path = notebook_dir / filename
 
     # Convert body source to cells
@@ -510,6 +522,65 @@ def _start_kernel_directly(
     return connection_file, app
 
 
+def _find_jupyterlab_start_directory(notebook_path: Path) -> Path:
+    """Find the appropriate directory to start JupyterLab from.
+
+    Searches for (in order):
+    1. The git top-level directory, if present
+    2. The directory above .venv, if present
+    3. The site-packages directory it's imported from, if present
+    4. The root directory /, if none of the above
+
+    Since we use --ContentsManager.allow_hidden=True, we can serve from hidden directories.
+
+    Args:
+        notebook_path: Path to the notebook file
+
+    Returns:
+        Path to start JupyterLab from
+    """
+    # 1. Try to get git repository root using git command
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            cwd=str(notebook_path.parent),
+            check=False
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return Path(result.stdout.strip())
+    except (subprocess.SubprocessError, FileNotFoundError):
+        # Git not available or not in a git repo
+        pass
+
+    # 2-4. Walk up looking for other markers
+    current = notebook_path.parent.absolute()
+    venv_parent = None
+    site_packages = None
+
+    while current != current.parent:
+        # 2. Track directory above .venv
+        if current.name == ".venv" and venv_parent is None:
+            venv_parent = current.parent
+
+        # 3. Track site-packages directory
+        if current.name == "site-packages" and site_packages is None:
+            site_packages = current
+
+        # Move up one directory
+        current = current.parent
+
+    # Return based on priority
+    if venv_parent:
+        return venv_parent
+    if site_packages:
+        return site_packages
+
+    # 4. Last resort: root directory
+    return Path("/")
+
+
 def _open_notebook_in_jupyterlab(
     notebook_path: Path, logger: logging.Logger, connection_file: str, func_name: str
 ) -> None:
@@ -577,6 +648,10 @@ def _open_notebook_in_jupyterlab(
 
         # Kernel info is available in the external connection file
 
+        # Find the appropriate directory to start JupyterLab from
+        jupyterlab_cwd = _find_jupyterlab_start_directory(notebook_path)
+        logger.info(f"Starting JupyterLab from directory: {jupyterlab_cwd}")
+
         # Open JupyterLab with external kernel support
         # Start JupyterLab with inherited stdout/stderr so it doesn't appear in notebook
         proc = subprocess.Popen(
@@ -586,12 +661,14 @@ def _open_notebook_in_jupyterlab(
                 str(notebook_path),
                 f"--ServerApp.external_connection_dir={external_kernels_dir}",
                 "--ServerApp.allow_external_kernels=True",
+                "--ContentsManager.allow_hidden=True",  # Allow serving from hidden directories
                 # "--debug",  # Enable debug logging
                 # "--log-level=DEBUG"  # Set log level to DEBUG
             ],
             # Inherit parent's stdout/stderr instead of capturing
             stdout=None,  # Inherits parent's stdout
             stderr=None,  # Inherits parent's stderr
+            cwd=str(jupyterlab_cwd),  # Start from the determined directory
         )
 
         # Store the process for cleanup
@@ -786,7 +863,7 @@ def notebookize(
         )
 
         # Generate jupytext notebook with kernel name (always enabled)
-        notebook_path = _generate_jupytext_notebook(func.__name__, body_source)
+        notebook_path = _generate_jupytext_notebook(func.__name__, body_source, source_file)
         logger.info(f"Notebook saved to: {notebook_path}")
 
         # Open in JupyterLab if requested

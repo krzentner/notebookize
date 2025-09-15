@@ -206,7 +206,8 @@ z = x + y
 return z"""
 
     # Generate notebook
-    notebook_path = _generate_jupytext_notebook("test_func", body_source)
+    test_source_file = "/tmp/test_source.py"
+    notebook_path = _generate_jupytext_notebook("test_func", body_source, test_source_file)
 
     content = notebook_path.read_text()
 
