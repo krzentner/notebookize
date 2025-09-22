@@ -86,25 +86,46 @@ def _convert_to_percent_format(body_source: str) -> List[str]:
     tree = cst.parse_module(body_source)
 
     cells = []
-    for child in tree.children:
+
+    # Process children (includes both statements and empty lines)
+    for idx, child in enumerate(tree.children):
         child_code = tree.code_for_node(child)
+
         if child_code.endswith("\n"):
             child_code = child_code[:-1]
         else:
             logging.warning(f"Statement on shared line may cause diff to be wrong: {child_code}")
+
         if len(cells) == 0:
             cells.append(child_code)
         else:
             # Move newlines from start of one statement to end of previous statement
             i = 0
-            while child_code[i] == "\n" and i < len(child_code):
+            while i < len(child_code) and child_code[i] == "\n":
                 cells[-1] = cells[-1] + "\n"
                 i += 1
             without_leading_newlines = child_code[i:]
+
+            # If what remains is empty (was just newlines), add a newline to previous cell
+            if without_leading_newlines == "":
+                cells[-1] = cells[-1] + "\n"
+                continue
+
             if without_leading_newlines.startswith("#") or i > 0:
                 cells.append(without_leading_newlines)
             else:
                 cells[-1] = cells[-1] + "\n" + without_leading_newlines
+
+    # Special handling to preserve the exact trailing newline behavior
+    # Handle edge case: input is just whitespace with no statements
+    if not cells:
+        cells.append(body_source)
+
+    # To make the invariant work, we need to ensure the last cell preserves trailing newlines
+    if body_source.endswith("\n"):
+        # The original had a trailing newline
+        # Need to add the trailing newline that libCST stripped
+        cells[-1] = cells[-1] + "\n"
 
     return cells
 

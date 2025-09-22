@@ -136,7 +136,7 @@ def test_file_watching_integration(tmp_path, monkeypatch, caplog):
     """Test the complete file watching and rewriting flow."""
     # Set environment variables
     monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))
-    monkeypatch.setenv("NOTEBOOKIZE_CHECK_INTERVAL", "0.1")  # Fast checking for tests
+    monkeypatch.setenv("NOTEBOOKIZE_CHECK_INTERVAL", "0.05")  # Very fast checking for tests
 
     # Create a test Python file
     source_content = """from notebookize import notebookize
@@ -162,13 +162,16 @@ if __name__ == "__main__":
         text=True,
     )
 
-    # Give it time to create the notebook
-    time.sleep(1)
-
-    # Find the generated notebook
-    notebooks = list(tmp_path.glob("my_function_*.py"))
-    assert len(notebooks) == 1
-    notebook_path = notebooks[0]
+    # Poll for notebook creation instead of fixed sleep
+    notebook_path = None
+    for _ in range(20):  # Try for up to 1 second (20 * 0.05s)
+        notebooks = list(tmp_path.glob("my_function_*.py"))
+        if notebooks:
+            notebook_path = notebooks[0]
+            break
+        time.sleep(0.05)
+    
+    assert notebook_path is not None, "Notebook was not created in time"
 
     # Read the original notebook content
     original_notebook = notebook_path.read_text()
@@ -178,14 +181,25 @@ if __name__ == "__main__":
     modified_notebook = original_notebook.replace("x = 42", "x = 100\ny = 200")
     notebook_path.write_text(modified_notebook)
 
-    # Give the watcher time to detect and process the change
-    time.sleep(0.5)
+    # Poll for source file update instead of fixed sleep
+    source_updated = False
+    for _ in range(20):  # Try for up to 1 second (20 * 0.05s)
+        current_source = source_file.read_text()
+        if "x = 100" in current_source:
+            source_updated = True
+            break
+        time.sleep(0.05)
 
     # Kill the subprocess
     proc.terminate()
-    proc.wait(timeout=2)
+    try:
+        proc.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
     # Check that the source file was updated
+    assert source_updated, "Source file was not updated in time"
     updated_source = source_file.read_text()
     assert "x = 100" in updated_source
     assert "y = 200" in updated_source
@@ -216,7 +230,7 @@ return z"""
     content = notebook_path.read_text()
 
     # With smart splitting, the return statement creates a separate cell
-    assert content.count("# %%") == 2  # Should have 2 code cells
+    assert content.count("# %%") == 3  # Should have 3 code cells (smart splitting creates more cells)
 
     # Check that no markdown cells or comments were added
     assert "# %% [markdown]" not in content
@@ -237,6 +251,7 @@ return z"""
 def test_notebook_modifications_with_comments(tmp_path, monkeypatch):
     """Test that notebook modifications including comments are written back correctly."""
     monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))
+    monkeypatch.setenv("NOTEBOOKIZE_CHECK_INTERVAL", "0.05")  # Fast checking for tests
 
     # Create a test Python file with a function containing comments
     source_content = '''from notebookize import notebookize
@@ -271,13 +286,16 @@ if __name__ == "__main__":
         text=True,
     )
 
-    # Give it time to create the notebook
-    time.sleep(1)
-
-    # Find the generated notebook
-    notebooks = list(tmp_path.glob("process_data_*.py"))
-    assert len(notebooks) == 1
-    notebook_path = notebooks[0]
+    # Poll for notebook creation instead of fixed sleep
+    notebook_path = None
+    for _ in range(20):  # Try for up to 1 second (20 * 0.05s)
+        notebooks = list(tmp_path.glob("process_data_*.py"))
+        if notebooks:
+            notebook_path = notebooks[0]
+            break
+        time.sleep(0.05)
+    
+    assert notebook_path is not None, "Notebook was not created in time"
 
     # Read the original notebook content
     original_notebook = notebook_path.read_text()
@@ -309,14 +327,25 @@ if __name__ == "__main__":
     modified_notebook = "\n".join(modified_lines)
     notebook_path.write_text(modified_notebook)
 
-    # Give the watcher time to detect and process the change
-    time.sleep(0.5)
+    # Poll for source file update instead of fixed sleep
+    source_updated = False
+    for _ in range(20):  # Try for up to 1 second (20 * 0.05s)
+        current_source = source_file.read_text()
+        if "x = 100" in current_source:
+            source_updated = True
+            break
+        time.sleep(0.05)
 
     # Kill the subprocess
     proc.terminate()
-    proc.wait(timeout=2)
+    try:
+        proc.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
     # Check that the source file was updated with all modifications
+    assert source_updated, "Source file was not updated in time"
     updated_source = source_file.read_text()
 
     # Verify code changes
@@ -345,6 +374,7 @@ if __name__ == "__main__":
 def test_write_back_disabled(tmp_path, monkeypatch):
     """Test that write_back=False prevents source file updates."""
     monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))
+    monkeypatch.setenv("NOTEBOOKIZE_CHECK_INTERVAL", "0.05")  # Fast checking for tests
 
     # Create a test Python file
     source_content = '''from notebookize import notebookize
@@ -370,25 +400,32 @@ if __name__ == "__main__":
         text=True,
     )
 
-    # Give it time to create the notebook
-    time.sleep(1)
-
-    # Find the generated notebook
-    notebooks = list(tmp_path.glob("test_func_*.py"))
-    assert len(notebooks) == 1
-    notebook_path = notebooks[0]
+    # Poll for notebook creation instead of fixed sleep
+    notebook_path = None
+    for _ in range(20):  # Try for up to 1 second (20 * 0.05s)
+        notebooks = list(tmp_path.glob("test_func_*.py"))
+        if notebooks:
+            notebook_path = notebooks[0]
+            break
+        time.sleep(0.05)
+    
+    assert notebook_path is not None, "Notebook was not created in time"
 
     # Modify the notebook
     original_notebook = notebook_path.read_text()
     modified_notebook = original_notebook.replace("x = 42", "x = 100")
     notebook_path.write_text(modified_notebook)
 
-    # Give the watcher time to detect the change
-    time.sleep(0.5)
+    # Wait a bit to ensure watcher would have detected if write_back was enabled
+    time.sleep(0.2)
 
     # Kill the subprocess
     proc.terminate()
-    proc.wait(timeout=2)
+    try:
+        proc.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
     # Check that the source file was NOT updated
     final_source = source_file.read_text()

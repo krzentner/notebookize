@@ -6,7 +6,7 @@ default:
 
 # Run all tests
 test:
-    uv run pytest tests/ -v
+    uv run pytest tests/ -vv
 
 # Run all tests including kernel connection test
 test-all:

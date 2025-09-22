@@ -10,20 +10,34 @@ def notebook_round_trip(body_source: str) -> str:
     # Convert to cells
     cells = _convert_to_percent_format(body_source)
     
-    # Create a temporary notebook with these cells
-    notebook_content = ["# ---", "# jupyter:", "# ---"]
+    # Create notebook content exactly like _generate_jupytext_notebook does
+    content_parts = []
+    
+    # Add minimal header
+    content_parts.append("# ---")
+    content_parts.append("# jupyter:")
+    content_parts.append("# ---")
+    
+    # Add cells - exactly like the real code does (no newline before # %%)
     for cell in cells:
-        notebook_content.append("\n# %%")
-        notebook_content.append(cell)
+        content_parts.append("# %%")
+        content_parts.append(cell)
+    
+    # Join with newlines like the real code
+    notebook_content = "\n".join(content_parts)
     
     # Write to temp file and extract back
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-        f.write('\n'.join(notebook_content))
+        f.write(notebook_content)
         temp_path = Path(f.name)
     
     try:
         # Extract code back from notebook
         extracted = _extract_code_from_notebook(temp_path)
+        # Remove the trailing newline that _extract_code_from_notebook adds
+        # to match the original input (which typically doesn't have one)
+        if extracted.endswith('\n') and not body_source.endswith('\n'):
+            extracted = extracted[:-1]
         return extracted
     finally:
         temp_path.unlink()

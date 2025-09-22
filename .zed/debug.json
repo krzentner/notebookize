@@ -20,5 +20,14 @@
     "args": ["tests/test_round_trip.py", "-vv"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "module": "pytest"
+  },
+  {
+    "adapter": "Debugpy",
+    "label": "pytest",
+    "request": "launch",
+    "python": "/home/kamilia/repos/notebookize/.venv/bin/python",
+    "args": ["tests/", "-vv"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "module": "pytest"
   }
 ]
