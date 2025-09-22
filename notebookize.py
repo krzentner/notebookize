@@ -1,6 +1,6 @@
 """A Python decorator that turns functions back into jupyter notebooks, complete with their context."""
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 import ast
 import inspect
