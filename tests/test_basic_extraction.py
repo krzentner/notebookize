@@ -106,6 +106,48 @@ return result"""
     assert any("result = x + y" in cell for cell in cells)
 
 
+def test_cell_markers_not_in_docstrings():
+    """Test that cell markers are not inserted inside multi-line docstrings."""
+    body_source = '''"""This is a multi-line
+docstring that spans
+
+multiple lines with blank lines.
+
+It should remain as a single cell."""
+
+x = 10
+y = 20
+
+def nested_func():
+    """Another docstring."""
+    return 42
+
+result = nested_func()'''
+
+    cells = _convert_to_percent_format(body_source)
+    
+    # Find the cell containing the multi-line docstring
+    docstring_cell = None
+    for cell in cells:
+        if "This is a multi-line" in cell:
+            docstring_cell = cell
+            break
+    
+    assert docstring_cell is not None, "Docstring cell not found"
+    
+    # The entire docstring should be in one cell
+    assert "multiple lines with blank lines" in docstring_cell
+    assert "It should remain as a single cell" in docstring_cell
+    
+    # The docstring should be complete (no #%% inserted in the middle)
+    assert '"""This is a multi-line' in docstring_cell
+    assert 'It should remain as a single cell."""' in docstring_cell
+    
+    # Other statements should be in separate cells
+    assert any("x = 10" in cell for cell in cells)
+    assert any("def nested_func():" in cell for cell in cells)
+
+
 def test_notebook_generation(tmp_path, monkeypatch):
     """Test generating a jupytext notebook."""
     monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))

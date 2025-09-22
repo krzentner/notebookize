@@ -45,7 +45,7 @@ test-manual:
     uv run python manual_test_jupyterlab.py
 
 # Run kernel demo
-run-demo:
+run-demo: clean
     echo "# THIS FILE IS A COPY AND GITIGNORED" > demo.py
     cat tests/demo.py >> demo.py
     uv run python demo.py
@@ -71,8 +71,9 @@ clean:
     find . -type d -name "*.egg-info" -exec rm -rf {} +
     find . -type d -name ".ipynb_checkpoints" -exec rm -rf {} +
     # Clean up generated notebook files (with timestamp pattern)
-    find . -type f -name "*_????????_??????_????????.jupytext.py" -delete
-    find . -type f -name "*_????????_??????_????????.py" -delete
+    find . -type f -name "*.nbize.py" -delete
+    find . -type f -name "*.jupytext.py" -delete
+    find . -type f -name "*.log" -delete
 
 build:
     uv run flit build

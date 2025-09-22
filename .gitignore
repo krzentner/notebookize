@@ -6,6 +6,7 @@ __pycache__
 .coverage
 /demo.py
 *.jupytext.py
+*.nbize.py
 /.ipynb_checkpoints
 /cleanup_jupyter.py
 *.log

@@ -13,6 +13,8 @@ import libcst as cst
 import time
 import subprocess
 import threading
+from pprint import pprint
+import sys
 
 from pathlib import Path
 from datetime import datetime
@@ -75,28 +77,63 @@ def _get_notebook_dir(source_file: str) -> Path:
 
 def _convert_to_percent_format(body_source: str) -> List[str]:
     """
-    Convert function body source to jupytext percent format.
-    Splits on blank lines to create cells. Comments are preserved in code cells.
+    Convert function body source to jupytext percent format using LibCST.
+    Splits on blank lines (for usability) while preserving multi-line docstrings intact.
     """
-    lines = body_source.split("\n")
-    cells: List[str] = []
-    current_cell: List[str] = []
+    # Parse the body source with LibCST
+    tree = cst.parse_module(body_source)
 
-    for line in lines:
-        # Check if this is a blank line
-        if not line.strip():
-            # If we have content in current cell, save it and start a new one
-            if current_cell:
-                cells.append("\n".join(current_cell))
-                current_cell = []
+    cells = []
+    current_cell_lines = []
+
+    # Check if there are header comments that should be a cell
+    if tree.header:
+        for line in tree.header:
+            if isinstance(line, cst.EmptyLine):
+                if line.comment:
+                    # Add comment to current cell
+                    current_cell_lines.append(line.comment.value)
+                elif current_cell_lines:
+                    # Blank line after comments - start new cell
+                    cells.append("\n".join(current_cell_lines))
+                    current_cell_lines = []
+
+    # If we have header content that wasn't yet added as a cell
+    if current_cell_lines:
+        cells.append("\n".join(current_cell_lines))
+        current_cell_lines = []
+
+    # Process body statements
+    for i, stmt in enumerate(tree.body):
+        # Check if this statement has leading blank lines (indicating a cell break)
+        has_blank_line = False
+        if hasattr(stmt, 'leading_lines') and stmt.leading_lines:
+            # Check for actual blank lines (not just comments)
+            for line in stmt.leading_lines:
+                if isinstance(line, cst.EmptyLine) and line.comment is None:
+                    has_blank_line = True
+                    break
+
+        # If there's a blank line and we have content, start a new cell
+        if has_blank_line and current_cell_lines:
+            cells.append("\n".join(current_cell_lines))
+            current_cell_lines = []
+
+        # Get the statement code (includes any leading comments but not blank lines)
+        stmt_code = tree.code_for_node(stmt).rstrip()
+
+        # Skip empty statements
+        if not stmt_code:
             continue
 
-        # Regular code line (including comments)
-        current_cell.append(line)
+        # Add the statement to the current cell
+        # Split by lines to handle the leading lines properly
+        lines = stmt_code.split('\n')
+        current_cell_lines.extend(lines)
 
     # Add any remaining content
-    if current_cell:
-        cells.append("\n".join(current_cell))
+    if current_cell_lines:
+        cells.append("\n".join(current_cell_lines))
 
     return cells
 
@@ -117,11 +154,12 @@ def _generate_jupytext_notebook(
     # Generate a unique filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = str(uuid.uuid4())[:8]
-    filename = f"{func_name}_{timestamp}_{unique_id}.jupytext.py"
+    filename = f"{func_name}_{timestamp}_{unique_id}.nbize.py"
     notebook_path = notebook_dir / filename
 
     # Convert body source to cells
     cells = _convert_to_percent_format(body_source)
+    pprint(cells)
 
     # Create the jupytext percent format content
     content_parts: List[str] = []
@@ -167,7 +205,7 @@ def _generate_jupytext_notebook(
 
     # Add cells - all are code cells now (including comments)
     for cell in cells:
-        content_parts.append("\n# %%")
+        content_parts.append("# %%")
         content_parts.append(cell)
 
     content = "\n".join(content_parts)
@@ -368,13 +406,13 @@ def _extract_function_body(func: Callable[..., Any]) -> str:
     """
     # Get the full source of the function
     source = inspect.getsource(func)
-    
+
     # Dedent the source before parsing (handles functions defined inside other scopes)
     source = textwrap.dedent(source)
-    
+
     # Parse with LibCST
     tree = cst.parse_module(source)
-    
+
     # Find the function node (should be the first/only one from getsource)
     for node in tree.body:
         if isinstance(node, cst.FunctionDef):
@@ -384,12 +422,53 @@ def _extract_function_body(func: Callable[..., Any]) -> str:
                 for stmt in node.body.body:
                     stmt_code = tree.code_for_node(stmt)
                     body_parts.append(stmt_code)
-                
+
                 # Join and dedent
                 body_code = '\n'.join(body_parts)
                 return textwrap.dedent(body_code)
-    
+
     raise ValueError(f"Could not extract body from function {func.__name__}")
+
+
+class TeeOutStream:
+    """Write to both IPython kernel and console stdout/stderr."""
+
+    def __init__(self, kernel_stream, console_stream):
+        self.kernel_stream = kernel_stream
+        self.console_stream = console_stream
+
+    def write(self, text):
+        # Write to kernel stream (for JupyterLab)
+        self.kernel_stream.write(text)
+        # Also write to console
+        if self.console_stream:
+            self.console_stream.write(text)
+            self.console_stream.flush()
+        return len(text)
+
+    def flush(self):
+        self.kernel_stream.flush()
+        if self.console_stream:
+            self.console_stream.flush()
+
+    def __getattr__(self, name):
+        # Delegate all other attributes to kernel stream
+        return getattr(self.kernel_stream, name)
+
+
+def _setup_tee_output():
+    """Setup output to go to both kernel and console after kernel init."""
+    # Save references to the kernel's OutStreams
+    kernel_stdout = sys.stdout
+    kernel_stderr = sys.stderr
+
+    # Get the original console streams (saved by Python before redirection)
+    original_stdout = sys.__stdout__
+    original_stderr = sys.__stderr__
+
+    # Replace with tee versions that write to both
+    sys.stdout = TeeOutStream(kernel_stdout, original_stdout)
+    sys.stderr = TeeOutStream(kernel_stderr, original_stderr)
 
 
 def _start_kernel_directly(
@@ -451,8 +530,11 @@ def _start_kernel_directly(
             "--IPKernelApp.kernel_name=" + kernel_id,
         ]
     )
-    logger.info(f"Kernel name: {kernel_id}")
 
+    # Setup tee output so print statements work in both console and JupyterLab
+    _setup_tee_output()
+
+    logger.info(f"Kernel name: {kernel_id}")
     logger.info(f"Kernel initialized with connection file: {connection_file}")
 
     # Return both the connection file and the app
@@ -632,7 +714,7 @@ def _extract_function_body_from_source(source_content: str, func_name: str) -> s
     """Extract function body from source code content using LibCST."""
     # Parse with LibCST
     tree = cst.parse_module(source_content)
-    
+
     # Find the function
     for node in tree.body:
         if isinstance(node, cst.FunctionDef) and node.name.value == func_name:
@@ -642,11 +724,11 @@ def _extract_function_body_from_source(source_content: str, func_name: str) -> s
                 for stmt in node.body.body:
                     stmt_code = tree.code_for_node(stmt)
                     body_parts.append(stmt_code)
-                
+
                 # Join and dedent
                 body_code = '\n'.join(body_parts)
                 return textwrap.dedent(body_code)
-    
+
     raise ValueError(f"Function '{func_name}' not found in source code.")
 
 
@@ -810,6 +892,7 @@ def notebookize(
         connection_file, kernel_app = _start_kernel_directly(
             func.__name__, logger, user_ns, user_module
         )
+        logger.info("Kernel Started")
 
         # Generate jupytext notebook with kernel name (always enabled)
         notebook_path = _generate_jupytext_notebook(

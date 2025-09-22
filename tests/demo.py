@@ -8,7 +8,9 @@ GLOBAL_CONFIG = {"version": "1.0", "debug": True}
 
 
 @notebookize
-def process_data(data_list, multiplier=2):
+def process_data(
+    data_list, multiplier=2
+) -> dict[str, float]:
     """Process data with access to function arguments in the kernel.
 
     The kernel will have access to:
