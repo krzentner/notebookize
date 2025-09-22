@@ -23,6 +23,56 @@ from typing import Callable, Any, Optional, Tuple, List, Union, TypeVar, Dict
 _jupyter_lab_processes: List[subprocess.Popen] = []
 
 
+class ReturnToAssignmentTransformer(cst.CSTTransformer):
+    """Transform return statements to _return = assignments for notebook execution."""
+
+    def leave_Return(
+        self, original_node: cst.Return, updated_node: cst.Return
+    ) -> Union[cst.Assign, cst.Return]:
+        """Convert return statements to _return = assignments."""
+        if updated_node.value is None:
+            # return with no value becomes _return = None
+            assignment = cst.Assign(
+                targets=[cst.AssignTarget(target=cst.Name("_return"))],
+                value=cst.Name("None"),
+            )
+        else:
+            # return expr becomes _return = expr
+            assignment = cst.Assign(
+                targets=[cst.AssignTarget(target=cst.Name("_return"))],
+                value=updated_node.value,
+            )
+
+        return assignment
+
+
+class AssignmentToReturnTransformer(cst.CSTTransformer):
+    """Transform _return = assignments back to return statements."""
+
+    def leave_Assign(
+        self, original_node: cst.Assign, updated_node: cst.Assign
+    ) -> Union[cst.Assign, cst.Return]:
+        """Convert _return = assignments back to return statements."""
+        # Check if it's assigning to _return
+        if (
+            len(updated_node.targets) == 1
+            and isinstance(updated_node.targets[0].target, cst.Name)
+            and updated_node.targets[0].target.value == "_return"
+        ):
+            # Convert back to return statement
+            if (
+                isinstance(updated_node.value, cst.Name)
+                and updated_node.value.value == "None"
+            ):
+                # _return = None becomes return
+                return cst.Return(value=None)
+            else:
+                # _return = expr becomes return expr
+                return cst.Return(value=updated_node.value)
+
+        return updated_node
+
+
 def _get_logger() -> logging.Logger:
     """Get or create the notebookize logger."""
     logger = logging.getLogger("notebookize")
@@ -94,7 +144,9 @@ def _convert_to_percent_format(body_source: str) -> List[str]:
         if child_code.endswith("\n"):
             child_code = child_code[:-1]
         else:
-            logging.warning(f"Statement on shared line may cause diff to be wrong: {child_code}")
+            logging.warning(
+                f"Statement on shared line may cause diff to be wrong: {child_code}"
+            )
 
         if len(cells) == 0:
             cells.append(child_code)
@@ -149,8 +201,14 @@ def _generate_jupytext_notebook(
     filename = f"{func_name}_{timestamp}_{unique_id}.nbize.py"
     notebook_path = notebook_dir / filename
 
+    # Transform return statements to _return assignments for notebook execution
+    tree = cst.parse_module(body_source)
+    transformer = ReturnToAssignmentTransformer()
+    modified_tree = tree.visit(transformer)
+    transformed_body_source = modified_tree.code
+
     # Convert body source to cells
-    cells = _convert_to_percent_format(body_source)
+    cells = _convert_to_percent_format(transformed_body_source)
 
     # Create the jupytext percent format content
     content_parts: List[str] = []
@@ -257,8 +315,14 @@ def _extract_code_from_notebook(notebook_path: Path) -> str:
     result = "\n".join(code_parts) if code_parts else ""
 
     # Ensure trailing newline if last line of notebook was not empty
-    if result and not result.endswith('\n'):
-        result += '\n'
+    if result and not result.endswith("\n"):
+        result += "\n"
+
+    # Transform _return assignments back to return statements
+    tree = cst.parse_module(result)
+    transformer = AssignmentToReturnTransformer()
+    modified_tree = tree.visit(transformer)
+    result = modified_tree.code
 
     return result
 
@@ -266,28 +330,25 @@ def _extract_code_from_notebook(notebook_path: Path) -> str:
 def _rewrite_function_in_file(file_path: str, func_name: str, new_body: str) -> bool:
     """
     Rewrite a function's body in a Python file while preserving everything else.
-    Uses split_file_at_function for a much simpler implementation.
+    Uses LibCST to handle both top-level functions and class methods.
     """
-    # Split the file into three parts
-    before, old_body, after, indent = _split_file_at_function(file_path, func_name)
+    # Read the file content
+    with open(file_path, "r") as f:
+        source_content = f.read()
 
-    # Prepare the new body with proper indentation
-    new_body_lines = []
-    for line in new_body.split("\n"):
-        if line.strip():
-            new_body_lines.append(indent + line)
-        else:
-            new_body_lines.append("")
+    # Parse with LibCST
+    tree = cst.parse_module(source_content)
 
-    # Reconstruct the file
-    new_body_indented = "\n".join(new_body_lines)
-    new_content = before + "\n" + new_body_indented
-    if after:
-        new_content += "\n" + after
+    # Apply the transformation
+    rewriter = FunctionBodyRewriter(func_name, new_body)
+    modified_tree = tree.visit(rewriter)
 
-    # Write back to the file
+    if not rewriter.replaced:
+        raise ValueError(f"Function '{func_name}' not found in {file_path}")
+
+    # Write back the modified content
     with open(file_path, "w") as f:
-        f.write(new_content)
+        f.write(modified_tree.code)
 
     return True
 
@@ -324,71 +385,94 @@ def _split_file_at_function(
     """
     Split a file into three parts: before function body, function body, and after function body.
     Returns (before, body, after, indent) where concatenating them gives the original file.
+    Uses AST for compatibility, but can find class methods using LibCST fallback.
     """
     with open(file_path, "r") as f:
         original_content = f.read()
 
-    # Parse the file to find the function
+    # First try the AST approach for backwards compatibility
     tree = ast.parse(original_content)
 
-    # Find the function node
+    # Find the function node (top-level only with AST)
     func_node = None
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
             func_node = node
             break
 
-    if not func_node:
+    if func_node:
+        # Get the lines of the original file
+        lines = original_content.split("\n")
+
+        # Find where the function signature ends (look for the colon)
+        func_start_line = func_node.lineno - 1  # Convert to 0-indexed
+        func_def_end_line = func_start_line
+        while func_def_end_line < len(lines) and not lines[
+            func_def_end_line
+        ].rstrip().endswith(":"):
+            func_def_end_line += 1
+
+        # The body starts on the next line
+        body_start_line = func_def_end_line + 1
+
+        # Find the end of the function body
+        if not func_node.body:
+            body_end_line = body_start_line
+        else:
+            # Use AST to find the last line
+            ast_end_lineno = func_node.body[-1].end_lineno
+            if ast_end_lineno is not None:
+                body_end_line = ast_end_lineno - 1
+            else:
+                body_end_line = -1
+
+            # Handle case where end_lineno is None
+            if body_end_line == -1:
+                body_end_line = _find_function_end_by_dedent(lines, body_start_line)
+
+        # Get the indentation of the function body
+        indent = ""
+        for i in range(body_start_line, min(body_end_line + 1, len(lines))):
+            if lines[i].strip():
+                indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                break
+        if not indent:
+            indent = "    "
+
+        # Split into three parts
+        before_lines = lines[:body_start_line]
+        body_lines = lines[body_start_line : body_end_line + 1]
+        after_lines = lines[body_end_line + 1 :]
+
+        before = "\n".join(before_lines)
+        body = "\n".join(body_lines)
+        after = "\n".join(after_lines) if after_lines else ""
+
+        return before, body, after, indent
+
+    # If AST couldn't find it (e.g., it's a class method), use LibCST
+    # Extract the function body using the LibCST-based function
+    try:
+        body = _extract_function_body_from_source(original_content, func_name)
+    except ValueError:
         raise ValueError(f"Function {func_name} not found in {file_path}")
 
-    # Get the lines of the original file
-    lines = original_content.split("\n")
+    # For class methods, we can't easily split with AST, so we return simplified values
+    # The rewrite function uses LibCST directly anyway
+    indent = "    "  # Default indent
 
-    # Find where the function signature ends (look for the colon)
-    func_start_line = func_node.lineno - 1  # Convert to 0-indexed
-    func_def_end_line = func_start_line
-    while func_def_end_line < len(lines) and not lines[
-        func_def_end_line
-    ].rstrip().endswith(":"):
-        func_def_end_line += 1
+    # Try to extract indent from the body
+    if body:
+        lines = body.split("\n")
+        for line in lines:
+            if line.strip():
+                indent = line[: len(line) - len(line.lstrip())]
+                if indent:
+                    break
 
-    # The body starts on the next line
-    body_start_line = func_def_end_line + 1
-
-    # Find the end of the function body
-    if not func_node.body:
-        body_end_line = body_start_line
-    else:
-        # Use AST to find the last line
-        ast_end_lineno = func_node.body[-1].end_lineno
-        if ast_end_lineno is not None:
-            body_end_line = ast_end_lineno - 1
-        else:
-            body_end_line = -1
-
-        # Handle case where end_lineno is None
-        if body_end_line == -1:
-            body_end_line = _find_function_end_by_dedent(lines, body_start_line)
-
-    # Get the indentation of the function body
-    indent = ""
-    for i in range(body_start_line, min(body_end_line + 1, len(lines))):
-        if lines[i].strip():
-            indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
-            break
-    if not indent:
-        indent = "    "
-
-    # Split into three parts
-    before_lines = lines[:body_start_line]
-    body_lines = lines[body_start_line : body_end_line + 1]
-    after_lines = lines[body_end_line + 1 :]
-
-    before = "\n".join(before_lines)
-    body = "\n".join(body_lines)
-    after = "\n".join(after_lines) if after_lines else ""
-
-    return before, body, after, indent
+    # For class methods, return empty before/after since we can't easily split
+    # This is okay because _rewrite_function_in_file uses LibCST directly now
+    return "", body, "", indent
 
 
 def _extract_function_body(func: Callable[..., Any]) -> str:
@@ -416,7 +500,7 @@ def _extract_function_body(func: Callable[..., Any]) -> str:
                     body_parts.append(stmt_code)
 
                 # Join without adding extra newlines - code_for_node already includes them
-                body_code = ''.join(body_parts)
+                body_code = "".join(body_parts)
                 return textwrap.dedent(body_code)
 
     raise ValueError(f"Could not extract body from function {func.__name__}")
@@ -702,26 +786,134 @@ def _open_notebook_in_jupyterlab(
         )
 
 
+class FunctionFinder(cst.CSTVisitor):
+    """Visitor to find all functions/methods with a given name."""
+
+    def __init__(self, func_name: str):
+        self.func_name = func_name
+        self.matches = []  # List of (node, context_path) tuples
+        self.context_stack = []  # Stack of class names for context
+
+    def visit_ClassDef(self, node: cst.ClassDef) -> bool:
+        """Track when we enter a class."""
+        self.context_stack.append(node.name.value)
+        return True
+
+    def leave_ClassDef(self, node: cst.ClassDef) -> None:
+        """Track when we leave a class."""
+        if self.context_stack and self.context_stack[-1] == node.name.value:
+            self.context_stack.pop()
+
+    def visit_FunctionDef(self, node: cst.FunctionDef) -> bool:
+        """Check if this function matches what we're looking for."""
+        if node.name.value == self.func_name:
+            # Store the function with its context (e.g., "MyClass.evaluate")
+            context = ".".join(self.context_stack + [node.name.value])
+            self.matches.append((node, context))
+        return True
+
+
+class FunctionBodyRewriter(cst.CSTTransformer):
+    """Transformer to rewrite the body of a specific function/method."""
+
+    def __init__(self, func_name: str, new_body: str):
+        self.func_name = func_name
+        self.new_body = new_body
+        self.context_stack = []
+        self.replaced = False
+
+    def visit_ClassDef(self, node: cst.ClassDef) -> bool:
+        """Track when we enter a class."""
+        self.context_stack.append(node.name.value)
+        return True
+
+    def leave_ClassDef(
+        self, original_node: cst.ClassDef, updated_node: cst.ClassDef
+    ) -> cst.ClassDef:
+        """Track when we leave a class."""
+        if self.context_stack and self.context_stack[-1] == original_node.name.value:
+            self.context_stack.pop()
+        return updated_node
+
+    def leave_FunctionDef(
+        self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
+    ) -> cst.FunctionDef:
+        """Replace the function body if this is the target function."""
+        if updated_node.name.value == self.func_name and not self.replaced:
+            # Parse the new body with proper indentation handling
+            # First dedent the new body to normalize it
+            import textwrap
+
+            dedented_body = textwrap.dedent(self.new_body)
+
+            # Ensure the body is at module level (no indentation)
+            lines = dedented_body.split("\n")
+            normalized_lines = []
+            min_indent = float("inf")
+
+            # Find minimum indentation of non-empty lines
+            for line in lines:
+                if line.strip():
+                    indent = len(line) - len(line.lstrip())
+                    min_indent = min(min_indent, indent)
+
+            # Remove the minimum indentation from all lines
+            if min_indent != float("inf"):
+                for line in lines:
+                    if line.strip():
+                        normalized_lines.append(line[min_indent:])
+                    else:
+                        normalized_lines.append("")
+            else:
+                normalized_lines = lines
+
+            normalized_body = "\n".join(normalized_lines)
+
+            # Parse the new body as a module to get the statements
+            new_body_module = cst.parse_module(normalized_body)
+
+            # Create a new IndentedBlock with the new body
+            if isinstance(updated_node.body, cst.IndentedBlock):
+                # Preserve the original indentation and create new body
+                new_body_block = updated_node.body.with_changes(
+                    body=new_body_module.body
+                )
+                self.replaced = True
+                return updated_node.with_changes(body=new_body_block)
+
+        return updated_node
+
+
 def _extract_function_body_from_source(source_content: str, func_name: str) -> str:
     """Extract function body from source code content using LibCST."""
     # Parse with LibCST
     tree = cst.parse_module(source_content)
 
-    # Find the function
-    for node in tree.body:
-        if isinstance(node, cst.FunctionDef) and node.name.value == func_name:
-            if isinstance(node.body, cst.IndentedBlock):
-                # Extract all statements in the body
-                body_parts = []
-                for stmt in node.body.body:
-                    stmt_code = tree.code_for_node(stmt)
-                    body_parts.append(stmt_code)
+    # Find all functions/methods with the given name
+    finder = FunctionFinder(func_name)
+    tree.visit(finder)  # Use visit() to walk the tree with the visitor
 
-                # Join without adding extra newlines - code_for_node already includes them
-                body_code = ''.join(body_parts)
-                return textwrap.dedent(body_code)
+    if not finder.matches:
+        raise ValueError(f"Function '{func_name}' not found in source code.")
 
-    raise ValueError(f"Function '{func_name}' not found in source code.")
+    # If there's only one match, use it
+    # If there are multiple matches, prefer the one with shortest context (less nested)
+    # This prioritizes top-level functions over methods, and methods over nested functions
+    best_match = min(finder.matches, key=lambda x: len(x[1].split(".")))
+    node = best_match[0]
+
+    if isinstance(node.body, cst.IndentedBlock):
+        # Extract all statements in the body
+        body_parts = []
+        for stmt in node.body.body:
+            stmt_code = tree.code_for_node(stmt)
+            body_parts.append(stmt_code)
+
+        # Join without adding extra newlines - code_for_node already includes them
+        body_code = "".join(body_parts)
+        return textwrap.dedent(body_code)
+
+    return ""
 
 
 def _handle_notebook_change(

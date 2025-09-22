@@ -24,10 +24,10 @@ return {"results": results, "total": total, "average": average}"""
 
     # Convert to cells
     cells = _convert_to_percent_format(original_body)
-    
+
     # Reconstruct body from cells - should be exact
     reconstructed_body = "\n".join(cells)
-    
+
     # Should be perfectly preserved
     assert reconstructed_body == original_body
 
@@ -39,10 +39,10 @@ def test_round_trip_preserves_single_blank_line():
 y = 2
 
 z = 3"""
-    
+
     cells = _convert_to_percent_format(original_body)
     reconstructed = "\n".join(cells)
-    
+
     assert reconstructed == original_body
 
 
@@ -56,10 +56,10 @@ y = 2
 
 
 z = 3"""
-    
+
     cells = _convert_to_percent_format(original_body)
     reconstructed = "\n".join(cells)
-    
+
     # Should preserve exact formatting including multiple blank lines
     assert reconstructed == original_body
 
@@ -73,12 +73,15 @@ It has a blank line inside.
 
 
 x = 10'''
-    
+
     cells = _convert_to_percent_format(original_body)
     reconstructed = "\n".join(cells)
-    
+
     # Should preserve everything exactly, including blank lines in docstring
     assert reconstructed == original_body
-    
+
     # Docstring should remain intact in one cell (not split despite internal blank)
-    assert any('"""This is a docstring.\n\nIt has a blank line inside.\n"""' in cell for cell in cells)
+    assert any(
+        '"""This is a docstring.\n\nIt has a blank line inside.\n"""' in cell
+        for cell in cells
+    )

@@ -44,7 +44,7 @@ def test_round_trip_invariant_complex_docstrings():
         "'''Single quotes\n\ntoo.'''",
         '"""Mixed \'quotes\' and "quotes"."""',
     ]
-    
+
     for body in test_cases:
         cells = _convert_to_percent_format(body)
         reconstructed = "\n".join(cells)
@@ -61,7 +61,7 @@ def test_round_trip_invariant_comments():
         "x = 1  # Inline comment",
         "# Comment\nx = 1  # Inline",
     ]
-    
+
     for body in test_cases:
         cells = _convert_to_percent_format(body)
         reconstructed = "\n".join(cells)
@@ -78,7 +78,7 @@ def test_round_trip_invariant_control_flow():
         "try:\n    x = 1\nexcept:\n    pass",
         "with open('file') as f:\n    data = f.read()",
     ]
-    
+
     for body in test_cases:
         cells = _convert_to_percent_format(body)
         reconstructed = "\n".join(cells)
@@ -102,7 +102,7 @@ def test_round_trip_invariant_nested_structures():
             return 42
     
     return inner, NestedClass'''
-    
+
     cells = _convert_to_percent_format(body)
     reconstructed = "\n".join(cells)
     assert reconstructed == body
@@ -145,7 +145,7 @@ def process(data: List[float]) -> float:
     
     # Final calculation
     return result / len(data) if data else 0'''
-    
+
     cells = _convert_to_percent_format(body)
     reconstructed = "\n".join(cells)
     assert reconstructed == body
@@ -157,32 +157,26 @@ def test_round_trip_invariant_edge_cases():
         # Trailing newline
         "x = 1\n",
         "x = 1\n\n",
-        
-        # Leading newline  
+        # Leading newline
         "\nx = 1",
         "\n\nx = 1",
-        
         # Both
         "\nx = 1\n",
-        
         # String literals that look like comments
         'x = "# Not a comment"',
         "x = '# Also not a comment'",
         'x = """# Not a\n# comment"""',
-        
         # Escaped quotes in strings
         'x = "String with \\"quotes\\""',
         "x = 'String with \\'quotes\\''",
-        
         # Raw strings
         'x = r"\\n is literal"',
         'x = r"""Raw\n\nmultiline"""',
-        
         # F-strings
         'x = f"Value: {y}"',
         'x = f"""Multi\n{y}\nline"""',
     ]
-    
+
     for body in test_cases:
         cells = _convert_to_percent_format(body)
         reconstructed = "\n".join(cells)
@@ -194,22 +188,26 @@ def test_round_trip_invariant_comprehensive():
     # This is the key property: for ANY valid Python function body,
     # joining the cells with "\n" should exactly recreate the original
     import inspect
-    
+
     # Test with this very function's body
     def sample_function():
         """A sample function."""
         x = 1
-        
+
         y = 2
-        
-        
+
         z = 3
         return x + y + z
-    
+
     import textwrap
-    body = textwrap.dedent(inspect.getsource(sample_function).split(":", 1)[1]).lstrip("\n")
+
+    body = textwrap.dedent(inspect.getsource(sample_function).split(":", 1)[1]).lstrip(
+        "\n"
+    )
     cells = _convert_to_percent_format(body)
     reconstructed = "\n".join(cells)
-    
+
     # The invariant must hold
-    assert reconstructed == body, f"Invariant violated:\nOriginal:\n{repr(body)}\nReconstructed:\n{repr(reconstructed)}"
+    assert reconstructed == body, (
+        f"Invariant violated:\nOriginal:\n{repr(body)}\nReconstructed:\n{repr(reconstructed)}"
+    )

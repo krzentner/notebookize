@@ -136,7 +136,9 @@ def test_file_watching_integration(tmp_path, monkeypatch, caplog):
     """Test the complete file watching and rewriting flow."""
     # Set environment variables
     monkeypatch.setenv("NOTEBOOKIZE_PATH", str(tmp_path))
-    monkeypatch.setenv("NOTEBOOKIZE_CHECK_INTERVAL", "0.05")  # Very fast checking for tests
+    monkeypatch.setenv(
+        "NOTEBOOKIZE_CHECK_INTERVAL", "0.05"
+    )  # Very fast checking for tests
 
     # Create a test Python file
     source_content = """from notebookize import notebookize
@@ -170,7 +172,7 @@ if __name__ == "__main__":
             notebook_path = notebooks[0]
             break
         time.sleep(0.05)
-    
+
     assert notebook_path is not None, "Notebook was not created in time"
 
     # Read the original notebook content
@@ -230,7 +232,9 @@ return z"""
     content = notebook_path.read_text()
 
     # With smart splitting, the return statement creates a separate cell
-    assert content.count("# %%") == 3  # Should have 3 code cells (smart splitting creates more cells)
+    assert (
+        content.count("# %%") == 3
+    )  # Should have 3 code cells (smart splitting creates more cells)
 
     # Check that no markdown cells or comments were added
     assert "# %% [markdown]" not in content
@@ -294,7 +298,7 @@ if __name__ == "__main__":
             notebook_path = notebooks[0]
             break
         time.sleep(0.05)
-    
+
     assert notebook_path is not None, "Notebook was not created in time"
 
     # Read the original notebook content
@@ -408,7 +412,7 @@ if __name__ == "__main__":
             notebook_path = notebooks[0]
             break
         time.sleep(0.05)
-    
+
     assert notebook_path is not None, "Notebook was not created in time"
 
     # Modify the notebook
