@@ -1,6 +1,5 @@
 """Test the return statement transformers."""
 
-import pytest
 from notebookize import (
     ReturnToAssignmentTransformer,
     AssignmentToReturnTransformer,
@@ -8,7 +7,6 @@ from notebookize import (
     _extract_code_from_notebook,
 )
 import libcst as cst
-from pathlib import Path
 
 
 class TestReturnToAssignmentTransformer:

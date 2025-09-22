@@ -1,13 +1,8 @@
 """Test that notebookize works with class methods."""
 
-import pytest
-import tempfile
-from pathlib import Path
 from notebookize import (
     _split_file_at_function,
     _rewrite_function_in_file,
-    _extract_function_body_from_source,
-    _handle_notebook_change,
 )
 
 

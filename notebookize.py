@@ -135,7 +135,7 @@ def _convert_to_percent_format(body_source: str) -> List[str]:
     """
     tree = cst.parse_module(body_source)
 
-    cells = []
+    cells: List[str] = []
 
     # Process children (includes both statements and empty lines)
     for idx, child in enumerate(tree.children):
@@ -509,11 +509,11 @@ def _extract_function_body(func: Callable[..., Any]) -> str:
 class TeeOutStream:
     """Write to both IPython kernel and console stdout/stderr."""
 
-    def __init__(self, kernel_stream, console_stream):
+    def __init__(self, kernel_stream: Any, console_stream: Any) -> None:
         self.kernel_stream = kernel_stream
         self.console_stream = console_stream
 
-    def write(self, text):
+    def write(self, text: str) -> int:
         # Write to kernel stream (for JupyterLab)
         self.kernel_stream.write(text)
         # Also write to console
@@ -522,17 +522,17 @@ class TeeOutStream:
             self.console_stream.flush()
         return len(text)
 
-    def flush(self):
+    def flush(self) -> None:
         self.kernel_stream.flush()
         if self.console_stream:
             self.console_stream.flush()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         # Delegate all other attributes to kernel stream
         return getattr(self.kernel_stream, name)
 
 
-def _setup_tee_output():
+def _setup_tee_output() -> None:
     """Setup output to go to both kernel and console after kernel init."""
     # Save references to the kernel's OutStreams
     kernel_stdout = sys.stdout
@@ -791,8 +791,10 @@ class FunctionFinder(cst.CSTVisitor):
 
     def __init__(self, func_name: str):
         self.func_name = func_name
-        self.matches = []  # List of (node, context_path) tuples
-        self.context_stack = []  # Stack of class names for context
+        self.matches: List[
+            Tuple[cst.FunctionDef, str]
+        ] = []  # List of (node, context_path) tuples
+        self.context_stack: List[str] = []  # Stack of class names for context
 
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         """Track when we enter a class."""
@@ -819,7 +821,7 @@ class FunctionBodyRewriter(cst.CSTTransformer):
     def __init__(self, func_name: str, new_body: str):
         self.func_name = func_name
         self.new_body = new_body
-        self.context_stack = []
+        self.context_stack: List[str] = []
         self.replaced = False
 
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
@@ -849,16 +851,19 @@ class FunctionBodyRewriter(cst.CSTTransformer):
             # Ensure the body is at module level (no indentation)
             lines = dedented_body.split("\n")
             normalized_lines = []
-            min_indent = float("inf")
+            min_indent: Optional[int] = None
 
             # Find minimum indentation of non-empty lines
             for line in lines:
                 if line.strip():
                     indent = len(line) - len(line.lstrip())
-                    min_indent = min(min_indent, indent)
+                    if min_indent is None:
+                        min_indent = indent
+                    else:
+                        min_indent = min(min_indent, indent)
 
             # Remove the minimum indentation from all lines
-            if min_indent != float("inf"):
+            if min_indent is not None:
                 for line in lines:
                     if line.strip():
                         normalized_lines.append(line[min_indent:])

@@ -1,8 +1,6 @@
 """Test round-trip preservation of code formatting."""
 
-import tempfile
-from pathlib import Path
-from notebookize import _extract_function_body, _convert_to_percent_format
+from notebookize import _convert_to_percent_format
 
 
 def test_round_trip_preserves_blank_lines():
