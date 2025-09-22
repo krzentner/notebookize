@@ -50,6 +50,10 @@ run-demo:
     cat tests/demo.py >> demo.py
     uv run python demo.py
 
+# Clean up stale Jupyter kernels and sessions
+clean-jupyter:
+    uv run python scripts/cleanup_jupyter.py
+
 
 # Run type checking with mypy
 lint:

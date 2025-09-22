@@ -11,12 +11,9 @@ dynamic = ["version", "description"]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "jupyterlab>=4.4.7",
-    "jupytext>=1.17.3",
-    "pyzmq>=25.0.0",
-    "ipykernel>=6.29.0",
-    "jupyter-client>=8.6.0",
-    "jupyter-console>=6.6.3",
+    "jupyterlab>=4",
+    "jupytext>=1",
+    "ipykernel>=6",
 ]
 
 [project.urls]

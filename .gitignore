@@ -7,3 +7,5 @@ __pycache__
 /demo.py
 *.jupytext.py
 /.ipynb_checkpoints
+/cleanup_jupyter.py
+*.log

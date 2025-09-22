@@ -656,8 +656,14 @@ def _open_notebook_in_jupyterlab(
         jupyterlab_cwd = _find_jupyterlab_start_directory(notebook_path)
         logger.info(f"Starting JupyterLab from directory: {jupyterlab_cwd}")
 
+        # Create log files next to the notebook
+        log_base = notebook_path.with_suffix("")
+        stdout_log = open(f"{log_base}.stdout.log", "w")
+        stderr_log = open(f"{log_base}.stderr.log", "w")
+        logger.info(f"JupyterLab logs: {log_base}.stdout.log and {log_base}.stderr.log")
+
         # Open JupyterLab with external kernel support
-        # Start JupyterLab with inherited stdout/stderr so it doesn't appear in notebook
+        # Redirect stdout/stderr to log files and stdin to /dev/null
         proc = subprocess.Popen(
             [
                 "jupyter",
@@ -669,9 +675,9 @@ def _open_notebook_in_jupyterlab(
                 # "--debug",  # Enable debug logging
                 # "--log-level=DEBUG"  # Set log level to DEBUG
             ],
-            # Inherit parent's stdout/stderr instead of capturing
-            stdout=None,  # Inherits parent's stdout
-            stderr=None,  # Inherits parent's stderr
+            stdin=subprocess.DEVNULL,  # No input
+            stdout=stdout_log,  # Log stdout to file
+            stderr=stderr_log,  # Log stderr to file
             cwd=str(jupyterlab_cwd),  # Start from the determined directory
         )
 
@@ -717,8 +723,6 @@ def _handle_notebook_change(
     notebook_path: Path, source_file: str, func_name: str, logger: logging.Logger
 ) -> bool:
     """Handle a detected change in the notebook file."""
-    logger.info(f"Notebook changed, updating {func_name} in {source_file}")
-
     # Extract code from the modified notebook
     new_body = _extract_code_from_notebook(notebook_path)
 
@@ -737,8 +741,14 @@ def _handle_notebook_change(
 
     old_body_dedented = textwrap.dedent(old_body)
 
+    # Check if there are actual changes
+    if old_body_dedented.strip() == new_body.strip():
+        logger.info(f"No actual changes detected in {func_name} ({source_file})")
+        return True  # Return True since there's no error, just no changes
+
     # Show diff if we have both old and new content
-    if old_body_dedented and old_body_dedented.strip() != new_body.strip():
+    logger.info(f"Notebook changed, updating {func_name} in {source_file}")
+    if old_body_dedented:
         import difflib
 
         diff_lines = list(
@@ -755,8 +765,6 @@ def _handle_notebook_change(
             logger.info("Changes detected:")
             for line in diff_lines:
                 logger.info(line.rstrip())
-    elif old_body_dedented.strip() == new_body.strip():
-        logger.info("No actual changes detected (content is identical)")
 
     # Rewrite the function in the source file
     success = _rewrite_function_in_file(source_file, func_name, new_body)
@@ -796,12 +804,12 @@ def _watch_notebook_for_changes(
                 current_mtime = notebook_path.stat().st_mtime
                 if current_mtime > last_mtime:
                     last_mtime = current_mtime
-                    logger.info("Change detected in notebook")
                     if write_back:
                         _handle_notebook_change(
                             notebook_path, source_file, func_name, logger
                         )
                     else:
+                        logger.info("Change detected in notebook")
                         logger.info(
                             f"Notebook {notebook_path.name} changed (write_back disabled)"
                         )
