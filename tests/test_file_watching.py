@@ -200,8 +200,10 @@ def test_notebook_cell_separation(tmp_path, monkeypatch):
 
     body_source = """x = 10
 
+
 y = 20
 z = x + y
+
 
 return z"""
 
@@ -213,8 +215,8 @@ return z"""
 
     content = notebook_path.read_text()
 
-    # Check that cells were separated by blank lines
-    assert content.count("# %%") >= 3  # Multiple code cells
+    # With smart splitting, the return statement creates a separate cell
+    assert content.count("# %%") == 2  # Should have 2 code cells
 
     # Check that no markdown cells or comments were added
     assert "# %% [markdown]" not in content

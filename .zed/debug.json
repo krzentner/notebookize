@@ -1,0 +1,24 @@
+// Project-local debug tasks
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+  {
+    "adapter": "Debugpy",
+    "label": "run module '/home/kamilia/repos/notebookize/notebookize.py'",
+    "request": "launch",
+    "python": "$ZED_CUSTOM_PYTHON_ACTIVE_ZED_TOOLCHAIN_RAW",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "module": "$ZED_CUSTOM_PYTHON_MODULE_NAME"
+  },
+  {
+    "adapter": "Debugpy",
+    "label": "pytest: test_round_trip",
+    "request": "launch",
+    "python": "/home/kamilia/repos/notebookize/.venv/bin/python",
+    "args": ["tests/test_round_trip.py", "-vv"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "module": "pytest"
+  }
+]

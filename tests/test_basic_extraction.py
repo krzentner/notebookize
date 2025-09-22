@@ -83,27 +83,23 @@ def test_convert_to_percent_format():
 x = 10
 y = 20
 
-# A second comment block
+
+# A second comment block after 2 blanks
 
 result = x + y
 return result"""
 
     cells = _convert_to_percent_format(body_source)
 
-    # Should have code cells separated by blank lines
+    # Should have code cells
     assert len(cells) > 0
 
-    # All cells should be strings (code cells) now - no markdown cells
+    # All cells should be strings
     assert all(isinstance(c, str) for c in cells)
 
-    # Should have at least 3 cells due to blank line separations
-    assert len(cells) >= 3
-
-    # Check that comments are preserved in code cells
-    assert any("# This is a comment" in cell for cell in cells)
-    assert any("# A second comment block" in cell for cell in cells)
-    assert any("x = 10" in cell for cell in cells)
-    assert any("result = x + y" in cell for cell in cells)
+    # Most importantly: round-trip should be exact
+    reconstructed = "\n".join(cells)
+    assert reconstructed == body_source, f"Round-trip failed:\nOriginal:\n{repr(body_source)}\nReconstructed:\n{repr(reconstructed)}"
 
 
 def test_cell_markers_not_in_docstrings():
@@ -126,6 +122,10 @@ result = nested_func()'''
 
     cells = _convert_to_percent_format(body_source)
     
+    # Most importantly: round-trip should be exact
+    reconstructed = "\n".join(cells)
+    assert reconstructed == body_source, f"Round-trip failed:\nOriginal:\n{repr(body_source)}\nReconstructed:\n{repr(reconstructed)}"
+    
     # Find the cell containing the multi-line docstring
     docstring_cell = None
     for cell in cells:
@@ -135,17 +135,11 @@ result = nested_func()'''
     
     assert docstring_cell is not None, "Docstring cell not found"
     
-    # The entire docstring should be in one cell
+    # The entire docstring should be in one cell (not split despite blank lines)
     assert "multiple lines with blank lines" in docstring_cell
     assert "It should remain as a single cell" in docstring_cell
-    
-    # The docstring should be complete (no #%% inserted in the middle)
     assert '"""This is a multi-line' in docstring_cell
     assert 'It should remain as a single cell."""' in docstring_cell
-    
-    # Other statements should be in separate cells
-    assert any("x = 10" in cell for cell in cells)
-    assert any("def nested_func():" in cell for cell in cells)
 
 
 def test_notebook_generation(tmp_path, monkeypatch):

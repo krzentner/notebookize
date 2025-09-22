@@ -26,6 +26,7 @@ def process_data(
         results.append(result)
 
     # The kernel can inspect and modify these variables
+    # Statements are combined into cells based on comments and newlines
     total = sum(results)
     average = total / len(results) if results else 0
 

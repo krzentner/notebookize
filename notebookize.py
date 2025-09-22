@@ -13,7 +13,6 @@ import libcst as cst
 import time
 import subprocess
 import threading
-from pprint import pprint
 import sys
 
 from pathlib import Path
@@ -78,62 +77,34 @@ def _get_notebook_dir(source_file: str) -> Path:
 def _convert_to_percent_format(body_source: str) -> List[str]:
     """
     Convert function body source to jupytext percent format using LibCST.
-    Splits on blank lines (for usability) while preserving multi-line docstrings intact.
+
+    Strategy: Use LibCST to find statement boundaries. Combine statements into
+    cells where appropriate (not separated by extra newlines nor block
+    comments). Move newlines to earlier cells when possible.
+    Cells joined with "\n" recreate the original exactly.
     """
-    # Parse the body source with LibCST
     tree = cst.parse_module(body_source)
 
     cells = []
-    current_cell_lines = []
-
-    # Check if there are header comments that should be a cell
-    if tree.header:
-        for line in tree.header:
-            if isinstance(line, cst.EmptyLine):
-                if line.comment:
-                    # Add comment to current cell
-                    current_cell_lines.append(line.comment.value)
-                elif current_cell_lines:
-                    # Blank line after comments - start new cell
-                    cells.append("\n".join(current_cell_lines))
-                    current_cell_lines = []
-
-    # If we have header content that wasn't yet added as a cell
-    if current_cell_lines:
-        cells.append("\n".join(current_cell_lines))
-        current_cell_lines = []
-
-    # Process body statements
-    for i, stmt in enumerate(tree.body):
-        # Check if this statement has leading blank lines (indicating a cell break)
-        has_blank_line = False
-        if hasattr(stmt, 'leading_lines') and stmt.leading_lines:
-            # Check for actual blank lines (not just comments)
-            for line in stmt.leading_lines:
-                if isinstance(line, cst.EmptyLine) and line.comment is None:
-                    has_blank_line = True
-                    break
-
-        # If there's a blank line and we have content, start a new cell
-        if has_blank_line and current_cell_lines:
-            cells.append("\n".join(current_cell_lines))
-            current_cell_lines = []
-
-        # Get the statement code (includes any leading comments but not blank lines)
-        stmt_code = tree.code_for_node(stmt).rstrip()
-
-        # Skip empty statements
-        if not stmt_code:
-            continue
-
-        # Add the statement to the current cell
-        # Split by lines to handle the leading lines properly
-        lines = stmt_code.split('\n')
-        current_cell_lines.extend(lines)
-
-    # Add any remaining content
-    if current_cell_lines:
-        cells.append("\n".join(current_cell_lines))
+    for child in tree.children:
+        child_code = tree.code_for_node(child)
+        if child_code.endswith("\n"):
+            child_code = child_code[:-1]
+        else:
+            logging.warning(f"Statement on shared line may cause diff to be wrong: {child_code}")
+        if len(cells) == 0:
+            cells.append(child_code)
+        else:
+            # Move newlines from start of one statement to end of previous statement
+            i = 0
+            while child_code[i] == "\n" and i < len(child_code):
+                cells[-1] = cells[-1] + "\n"
+                i += 1
+            without_leading_newlines = child_code[i:]
+            if without_leading_newlines.startswith("#") or i > 0:
+                cells.append(without_leading_newlines)
+            else:
+                cells[-1] = cells[-1] + "\n" + without_leading_newlines
 
     return cells
 
@@ -159,7 +130,6 @@ def _generate_jupytext_notebook(
 
     # Convert body source to cells
     cells = _convert_to_percent_format(body_source)
-    pprint(cells)
 
     # Create the jupytext percent format content
     content_parts: List[str] = []
@@ -262,13 +232,14 @@ def _extract_code_from_notebook(notebook_path: Path) -> str:
     if current_cell and in_code_cell:
         code_parts.append("\n".join(current_cell))
 
-    # Combine all code parts, separated by blank lines
-    filtered_parts = []
-    for part in code_parts:
-        if part.strip():
-            filtered_parts.append(part.strip())
+    # Join cells back with single newline (cells include their own trailing blanks)
+    result = "\n".join(code_parts) if code_parts else ""
 
-    return "\n\n".join(filtered_parts)
+    # Ensure trailing newline if last line of notebook was not empty
+    if result and not result.endswith('\n'):
+        result += '\n'
+
+    return result
 
 
 def _rewrite_function_in_file(file_path: str, func_name: str, new_body: str) -> bool:
@@ -423,8 +394,8 @@ def _extract_function_body(func: Callable[..., Any]) -> str:
                     stmt_code = tree.code_for_node(stmt)
                     body_parts.append(stmt_code)
 
-                # Join and dedent
-                body_code = '\n'.join(body_parts)
+                # Join without adding extra newlines - code_for_node already includes them
+                body_code = ''.join(body_parts)
                 return textwrap.dedent(body_code)
 
     raise ValueError(f"Could not extract body from function {func.__name__}")
@@ -725,8 +696,8 @@ def _extract_function_body_from_source(source_content: str, func_name: str) -> s
                     stmt_code = tree.code_for_node(stmt)
                     body_parts.append(stmt_code)
 
-                # Join and dedent
-                body_code = '\n'.join(body_parts)
+                # Join without adding extra newlines - code_for_node already includes them
+                body_code = ''.join(body_parts)
                 return textwrap.dedent(body_code)
 
     raise ValueError(f"Function '{func_name}' not found in source code.")
