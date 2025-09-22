@@ -14,6 +14,7 @@ dependencies = [
     "jupyterlab>=4",
     "jupytext>=1",
     "ipykernel>=6",
+    "libcst>=1.8",
 ]
 
 [project.urls]

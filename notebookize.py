@@ -9,6 +9,7 @@ import textwrap
 import logging
 import os
 import uuid
+import libcst as cst
 import time
 import subprocess
 import threading
@@ -70,83 +71,6 @@ def _get_notebook_dir(source_file: str) -> Path:
         return Path(notebook_dir)
 
     return Path(source_file).parent
-
-
-def _get_function_source_and_def_index(
-    func: Callable[..., Any],
-) -> Tuple[List[str], int]:
-    """
-    Get the source lines of a function and find where the actual
-    function definition starts (skipping decorators).
-    Returns (source_lines, func_def_index).
-    """
-    source_lines, _ = inspect.getsourcelines(func)
-
-    # Find the index of the actual function definition line (skipping decorators)
-    func_def_index = 0
-    for i, line in enumerate(source_lines):
-        if line.strip().startswith("def "):
-            func_def_index = i
-            break
-
-    return source_lines, func_def_index
-
-
-def _parse_function_ast(
-    source_lines: List[str], func_def_index: int, func_name: str
-) -> ast.FunctionDef:
-    """Parse the function source and return the AST node for the function."""
-    # Get source starting from the function definition
-    source_from_def = "".join(source_lines[func_def_index:])
-
-    # Dedent the source to remove leading indentation for parsing
-    dedented_source = textwrap.dedent(source_from_def)
-
-    # Parse the source to get the AST
-    tree = ast.parse(dedented_source)
-
-    # Find the function definition node
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == func_name:
-            return node
-
-    raise ValueError(f"Function '{func_name}' not found in source")
-
-
-def _get_function_body_bounds(
-    func_node: ast.FunctionDef, source_lines: List[str]
-) -> Tuple[int, int]:
-    """
-    Get the line bounds of the function body.
-    Returns (first_body_line, last_body_line) relative to the parsed source.
-    """
-    if not func_node or not func_node.body:
-        raise ValueError("Function node has no body - cannot extract empty function")
-
-    # The function signature ends with a colon, body starts on next line
-    func_def_line = func_node.lineno
-    first_body_line = func_def_line + 1
-    last_body_line = func_node.body[-1].end_lineno
-    if last_body_line is None:
-        raise ValueError(
-            "Cannot determine end line of function body - AST node missing end_lineno"
-        )
-
-    return first_body_line, last_body_line
-
-
-def _extract_body_lines(
-    source_lines: List[str],
-    func_def_index: int,
-    first_body_line: int,
-    last_body_line: int,
-) -> List[str]:
-    """Extract the actual body lines from the source."""
-    # Adjust indices: offset by func_def_index since we parsed from there
-    # and line numbers in AST are 1-indexed relative to the parsed source
-    actual_start = func_def_index + first_body_line - 1
-    actual_end = func_def_index + last_body_line
-    return source_lines[actual_start:actual_end]
 
 
 def _convert_to_percent_format(body_source: str) -> List[str]:
@@ -439,23 +363,33 @@ def _split_file_at_function(
 
 def _extract_function_body(func: Callable[..., Any]) -> str:
     """
-    Extract the body source code of a function.
-    Returns the body source as a string or None if extraction fails.
+    Extract the body source code of a function using LibCST.
+    Returns the body source as a string, preserving docstrings and comments.
     """
-    # Get source lines and find where the function definition starts
-    source_lines, func_def_index = _get_function_source_and_def_index(func)
-
-    # Parse AST to find function boundaries
-    func_node = _parse_function_ast(source_lines, func_def_index, func.__name__)
-
-    # Get body line boundaries
-    first_body_line, last_body_line = _get_function_body_bounds(func_node, source_lines)
-
-    # Extract and dedent body lines
-    body_lines = _extract_body_lines(
-        source_lines, func_def_index, first_body_line, last_body_line
-    )
-    return textwrap.dedent("".join(body_lines))
+    # Get the full source of the function
+    source = inspect.getsource(func)
+    
+    # Dedent the source before parsing (handles functions defined inside other scopes)
+    source = textwrap.dedent(source)
+    
+    # Parse with LibCST
+    tree = cst.parse_module(source)
+    
+    # Find the function node (should be the first/only one from getsource)
+    for node in tree.body:
+        if isinstance(node, cst.FunctionDef):
+            if isinstance(node.body, cst.IndentedBlock):
+                # Extract all statements in the body
+                body_parts = []
+                for stmt in node.body.body:
+                    stmt_code = tree.code_for_node(stmt)
+                    body_parts.append(stmt_code)
+                
+                # Join and dedent
+                body_code = '\n'.join(body_parts)
+                return textwrap.dedent(body_code)
+    
+    raise ValueError(f"Could not extract body from function {func.__name__}")
 
 
 def _start_kernel_directly(
@@ -695,27 +629,24 @@ def _open_notebook_in_jupyterlab(
 
 
 def _extract_function_body_from_source(source_content: str, func_name: str) -> str:
-    """Extract function body from source code content."""
-    tree = ast.parse(source_content)
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == func_name:
-            # Get the original source lines
-            source_lines = source_content.splitlines()
-
-            # Find function start and end
-            func_start_line = node.lineno - 1  # Convert to 0-based
-
-            # Find the last line of the function
-            func_end_line = func_start_line
-            for child in ast.walk(node):
-                if hasattr(child, "lineno") and child.lineno is not None:
-                    func_end_line = max(func_end_line, child.lineno - 1)
-
-            # Extract function lines (skip the def line)
-            if func_start_line + 1 <= func_end_line:
-                func_lines = source_lines[func_start_line + 1 : func_end_line + 1]
-                return "\n".join(func_lines)
+    """Extract function body from source code content using LibCST."""
+    # Parse with LibCST
+    tree = cst.parse_module(source_content)
+    
+    # Find the function
+    for node in tree.body:
+        if isinstance(node, cst.FunctionDef) and node.name.value == func_name:
+            if isinstance(node.body, cst.IndentedBlock):
+                # Extract all statements in the body
+                body_parts = []
+                for stmt in node.body.body:
+                    stmt_code = tree.code_for_node(stmt)
+                    body_parts.append(stmt_code)
+                
+                # Join and dedent
+                body_code = '\n'.join(body_parts)
+                return textwrap.dedent(body_code)
+    
     raise ValueError(f"Function '{func_name}' not found in source code.")
 
 
